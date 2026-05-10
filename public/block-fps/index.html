@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Block FPS Arena</title>
+  <style>
+    html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#070b14; font-family:Arial, sans-serif; touch-action:none; }
+    canvas { display:block; }
+    #hud { position:fixed; inset:0; pointer-events:none; color:white; text-shadow:0 2px 8px #000; }
+    #top { position:absolute; top:12px; left:12px; right:12px; display:flex; justify-content:space-between; gap:12px; font-weight:700; }
+    .pill { background:rgba(0,0,0,.45); border:1px solid rgba(255,255,255,.18); border-radius:14px; padding:10px 12px; backdrop-filter:blur(8px); }
+    #center { position:absolute; left:50%; top:50%; width:18px; height:18px; transform:translate(-50%,-50%); }
+    #center:before,#center:after { content:""; position:absolute; background:#fff; box-shadow:0 0 8px #34d399; }
+    #center:before { left:8px; top:0; width:2px; height:18px; }
+    #center:after { left:0; top:8px; width:18px; height:2px; }
+    #start { position:fixed; inset:0; display:grid; place-items:center; background:radial-gradient(circle at top,#1d4ed8 0,#07111f 46%,#030712 100%); color:white; z-index:10; }
+    #panel { width:min(560px,92vw); padding:26px; border-radius:24px; background:rgba(5,10,22,.78); border:1px solid rgba(255,255,255,.16); box-shadow:0 24px 80px rgba(0,0,0,.5); text-align:center; }
+    h1 { margin:0 0 8px; font-size:clamp(28px,7vw,54px); letter-spacing:.5px; }
+    p { line-height:1.45; color:#dbeafe; }
+    button { border:0; border-radius:16px; padding:14px 22px; font-weight:800; font-size:18px; color:#05111e; background:linear-gradient(135deg,#5eead4,#22c55e); box-shadow:0 12px 35px rgba(34,197,94,.35); }
+    #mobile { display:none; position:fixed; inset:0; pointer-events:none; z-index:5; }
+    .stick { position:absolute; bottom:28px; width:132px; height:132px; border-radius:50%; background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); pointer-events:auto; touch-action:none; }
+    #moveStick { left:24px; } #lookStick { right:24px; }
+    .knob { position:absolute; left:43px; top:43px; width:46px; height:46px; border-radius:50%; background:rgba(255,255,255,.65); }
+    #fire { position:absolute; right:38px; bottom:178px; width:82px; height:82px; border-radius:50%; border:1px solid rgba(255,255,255,.22); background:rgba(248,113,113,.72); color:white; font-weight:900; display:grid; place-items:center; pointer-events:auto; user-select:none; }
+    #jump { position:absolute; right:132px; bottom:158px; width:64px; height:64px; border-radius:50%; border:1px solid rgba(255,255,255,.22); background:rgba(96,165,250,.65); color:white; font-weight:900; display:grid; place-items:center; pointer-events:auto; user-select:none; }
+    #msg { position:absolute; bottom:22px; left:50%; transform:translateX(-50%); opacity:.85; text-align:center; }
+    @media (pointer:coarse) { #mobile { display:block; } #msg { display:none; } }
+  </style>
+</head>
+<body>
+  <div id="start"><div id="panel"><h1>Block FPS Arena</h1><p>Браузерная FPS-арена в блочном стиле. На ПК: WASD, мышь, клик для выстрела, Space для прыжка. На телефоне: левый стик ходьба, правый обзор, FIRE стрелять.</p><button id="play">Играть</button></div></div>
+  <div id="hud"><div id="top"><div class="pill" id="health">HP 100</div><div class="pill" id="score">Score 0</div><div class="pill" id="fps">FPS 0</div></div><div id="center"></div><div id="msg" class="pill">Нажми на экран, чтобы захватить мышь</div></div>
+  <div id="mobile"><div id="moveStick" class="stick"><div class="knob"></div></div><div id="lookStick" class="stick"><div class="knob"></div></div><div id="fire">FIRE</div><div id="jump">JUMP</div></div>
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script>
+  (() => {
+    const scene = new THREE.Scene(); scene.background = new THREE.Color(0x8dd7ff); scene.fog = new THREE.Fog(0x8dd7ff, 45, 120);
+    const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 180);
+    const renderer = new THREE.WebGLRenderer({ antialias:false, powerPreference:'high-performance' });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5)); renderer.setSize(innerWidth, innerHeight); document.body.appendChild(renderer.domElement);
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x26405c, 1.4); scene.add(hemi);
+    const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(20,40,10); scene.add(sun);
+    const matGround = new THREE.MeshLambertMaterial({color:0x30a46c});
+    const matWall = new THREE.MeshLambertMaterial({color:0x64748b});
+    const matEnemy = new THREE.MeshLambertMaterial({color:0xef4444});
+    const matBox = new THREE.MeshLambertMaterial({color:0xf59e0b});
+    const ground = new THREE.Mesh(new THREE.BoxGeometry(140,2,140), matGround); ground.position.y=-1; scene.add(ground);
+    const colliders=[]; function box(x,y,z,w,h,d,mat=matWall){ const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat); m.position.set(x,y,z); scene.add(m); colliders.push(m); return m; }
+    for(let i=-60;i<=60;i+=12){ box(i,2,-64,10,6,3); box(i,2,64,10,6,3); box(-64,2,i,3,6,10); box(64,2,i,3,6,10); }
+    for(let i=0;i<36;i++){ const x=(Math.random()*100-50), z=(Math.random()*100-50); if(Math.hypot(x,z)>12) box(x,1.6,z,4+Math.random()*5,3.2,4+Math.random()*5,matBox); }
+    const player={pos:new THREE.Vector3(0,2,12), vel:new THREE.Vector3(), yaw:0, pitch:0, hp:100, score:0, grounded:false};
+    const keys={}; addEventListener('keydown',e=>keys[e.code]=true); addEventListener('keyup',e=>keys[e.code]=false);
+    addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight);});
+    document.body.addEventListener('click',()=>{ if(document.pointerLockElement!==document.body && matchMedia('(pointer:fine)').matches) document.body.requestPointerLock(); });
+    document.addEventListener('mousemove',e=>{ if(document.pointerLockElement===document.body){ player.yaw-=e.movementX*0.0022; player.pitch-=e.movementY*0.0022; player.pitch=Math.max(-1.35,Math.min(1.35,player.pitch)); }});
+    const enemies=[]; function spawnEnemy(){ const g=new THREE.Group(); const body=new THREE.Mesh(new THREE.BoxGeometry(1.7,2.2,1.1),matEnemy); body.position.y=1.1; const head=new THREE.Mesh(new THREE.BoxGeometry(1.2,1.2,1.2),matEnemy); head.position.y=2.8; g.add(body,head); let x,z; do{x=Math.random()*110-55;z=Math.random()*110-55;}while(Math.hypot(x-player.pos.x,z-player.pos.z)<25); g.position.set(x,0,z); g.hp=3; g.cool=0; scene.add(g); enemies.push(g); }
+    for(let i=0;i<10;i++) spawnEnemy();
+    const bullets=[]; function shoot(){ const dir=new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(player.pitch,player.yaw,0,'YXZ')); const b=new THREE.Mesh(new THREE.SphereGeometry(.14,8,8),new THREE.MeshBasicMaterial({color:0xffff66})); b.position.copy(player.pos).add(new THREE.Vector3(0,.5,0)).add(dir.clone().multiplyScalar(1.4)); b.vel=dir.multiplyScalar(78); b.life=1.15; scene.add(b); bullets.push(b); }
+    addEventListener('mousedown',e=>{ if(e.button===0) shoot(); });
+    const mobile={move:{x:0,y:0},look:{x:0,y:0},fire:false,jump:false};
+    function stick(id,target){ const el=document.getElementById(id), knob=el.querySelector('.knob'); let active=null; el.addEventListener('touchstart',e=>{active=e.changedTouches[0].identifier;}, {passive:false}); el.addEventListener('touchmove',e=>{e.preventDefault(); for(const t of e.changedTouches) if(t.identifier===active){ const r=el.getBoundingClientRect(), cx=r.left+r.width/2, cy=r.top+r.height/2; let dx=t.clientX-cx, dy=t.clientY-cy; const len=Math.hypot(dx,dy), max=46; if(len>max){dx=dx/len*max; dy=dy/len*max;} target.x=dx/max; target.y=dy/max; knob.style.transform=`translate(${dx}px,${dy}px)`; }}, {passive:false}); el.addEventListener('touchend',()=>{active=null;target.x=target.y=0;knob.style.transform='translate(0,0)';}); }
+    stick('moveStick', mobile.move); stick('lookStick', mobile.look);
+    document.getElementById('fire').ontouchstart=e=>{e.preventDefault(); mobile.fire=true; shoot();}; document.getElementById('fire').ontouchend=()=>mobile.fire=false;
+    document.getElementById('jump').ontouchstart=e=>{e.preventDefault(); mobile.jump=true;}; document.getElementById('jump').ontouchend=()=>mobile.jump=false;
+    document.getElementById('play').onclick=()=>document.getElementById('start').style.display='none';
+    let last=performance.now(), frames=0, acc=0, fireCd=0;
+    function update(dt){
+      const forward=new THREE.Vector3(Math.sin(player.yaw),0,Math.cos(player.yaw)*-1); const right=new THREE.Vector3(Math.cos(player.yaw),0,Math.sin(player.yaw));
+      let mx=(keys.KeyD?1:0)-(keys.KeyA?1:0)+mobile.move.x, mz=(keys.KeyW?1:0)-(keys.KeyS?1:0)-mobile.move.y; const len=Math.hypot(mx,mz)||1; mx/=len; mz/=len;
+      const speed=keys.ShiftLeft?13:9; player.vel.x=(right.x*mx+forward.x*mz)*speed; player.vel.z=(right.z*mx+forward.z*mz)*speed; player.vel.y-=28*dt;
+      if((keys.Space||mobile.jump)&&player.grounded){player.vel.y=11; player.grounded=false;}
+      player.pos.addScaledVector(player.vel,dt); if(player.pos.y<2){player.pos.y=2; player.vel.y=0; player.grounded=true;}
+      player.pos.x=Math.max(-61,Math.min(61,player.pos.x)); player.pos.z=Math.max(-61,Math.min(61,player.pos.z));
+      player.yaw-=mobile.look.x*dt*2.5; player.pitch-=mobile.look.y*dt*2.0; player.pitch=Math.max(-1.35,Math.min(1.35,player.pitch));
+      camera.position.copy(player.pos); camera.rotation.set(player.pitch,player.yaw,0,'YXZ');
+      fireCd-=dt; if(mobile.fire&&fireCd<=0){ shoot(); fireCd=.16; }
+      for(let i=bullets.length-1;i>=0;i--){ const b=bullets[i]; b.position.addScaledVector(b.vel,dt); b.life-=dt; let hit=false; for(let j=enemies.length-1;j>=0;j--){ const e=enemies[j]; if(b.position.distanceTo(e.position.clone().add(new THREE.Vector3(0,1.4,0)))<1.6){ e.hp--; hit=true; if(e.hp<=0){ scene.remove(e); enemies.splice(j,1); player.score+=10; spawnEnemy(); } break; }} if(hit||b.life<=0){scene.remove(b); bullets.splice(i,1);} }
+      for(const e of enemies){ const to=player.pos.clone().sub(e.position); const dist=to.length(); if(dist>1.8){ to.y=0; to.normalize(); e.position.addScaledVector(to,dt*(2.2+player.score/150)); e.lookAt(player.pos.x,1,player.pos.z); } e.cool-=dt; if(dist<2.4&&e.cool<=0){ player.hp=Math.max(0,player.hp-8); e.cool=.7; if(player.hp<=0){ player.hp=100; player.score=0; player.pos.set(0,2,12); } } }
+      document.getElementById('health').textContent='HP '+player.hp; document.getElementById('score').textContent='Score '+player.score;
+    }
+    function loop(now){ const dt=Math.min(.033,(now-last)/1000); last=now; update(dt); renderer.render(scene,camera); frames++; acc+=dt; if(acc>.5){document.getElementById('fps').textContent='FPS '+Math.round(frames/acc); frames=0; acc=0;} requestAnimationFrame(loop); }
+    requestAnimationFrame(loop);
+  })();
+  </script>
+</body>
+</html>
