@@ -1,0 +1,14 @@
+# Roblox / Rojo
+*.rbxl
+*.rbxlx
+*.rbxl.lock
+*.rbxlx.lock
+
+# Секреты бэкенда (НЕ коммитить ключи)
+.env
+secrets.json
+backend/.env
+
+# Системное
+.DS_Store
+node_modules/
