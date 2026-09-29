@@ -36,15 +36,6 @@ async function googleTts(text, language) {
 }
 
 export default async function handler(req, res) {
-  if (req.method === 'GET' && req.query?.probe === '859a4273072e6f66') {
-    try {
-      const audio = await googleTts('Проверка голоса', 'ru');
-      return res.status(200).json({ ok: true, bytes: audio.length, provider: 'google-tts' });
-    } catch (error) {
-      console.error('TTS probe error', error);
-      return res.status(500).json({ ok: false, error: 'probe failed' });
-    }
-  }
   if (req.method === 'GET') {
     return res.status(200).json({ ok: true, provider: 'google-tts' });
   }
