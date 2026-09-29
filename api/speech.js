@@ -7,6 +7,17 @@ function voiceFor(language, profile) {
 }
 
 export default async function handler(req, res) {
+  if (req.method === 'GET' && req.query?.probe === 'voicecheck') {
+    try {
+      const tts = new EdgeTTS('Проверка голоса', 'ru-RU-DmitryNeural');
+      const result = await tts.synthesize();
+      const audio = Buffer.from(await result.audio.arrayBuffer());
+      return res.status(200).json({ ok: true, bytes: audio.length, provider: 'microsoft-neural' });
+    } catch (error) {
+      console.error('Neural TTS probe error', error);
+      return res.status(500).json({ ok: false, error: 'probe failed' });
+    }
+  }
   if (req.method === 'GET') {
     return res.status(200).json({
       ok: true,
