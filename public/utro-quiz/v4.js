@@ -3,6 +3,11 @@
   var booted=false;
   var audioCache=new Map();
   var currentAudio=null;
+  var carMode=false;
+  var recognition=null;
+  var listening=false;
+  var recognitionHandled=false;
+  var carSequence=0;
 
   function v4Q(id,cat,diff,kind,text,correct,distractors,explanation,extra){
     var item=q(id,cat,diff,text,correct,distractors,explanation);
@@ -141,22 +146,31 @@
   }
 
   async function playTts(text,language,button){
-    if(!text)return;
-    var key=(language||"ru")+"|"+text;
+    if(!text)return false;
+    stopListening();
+    var profileId=(typeof state!=="undefined"&&state.activeProfile)||"elisey";
+    var key=profileId+"|"+(language||"ru")+"|"+text;
     try{
       if(currentAudio){currentAudio.pause();currentAudio.currentTime=0;}
       if(button)button.classList.add("loading");
+      if(carMode)setCarStatus("speaking","Говорю…","");
       var url=audioCache.get(key);
       if(!url){
-        var response=await fetch("/api/speech",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:text,language:language||"ru"})});
+        var response=await fetch("/api/speech",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:text,language:language||"ru",profile:profileId})});
         if(!response.ok)throw new Error("TTS "+response.status);
         var blob=await response.blob();
         url=URL.createObjectURL(blob);audioCache.set(key,url);
       }
       currentAudio=new Audio(url);
-      await currentAudio.play();
+      await new Promise(function(resolve,reject){
+        currentAudio.onended=resolve;
+        currentAudio.onerror=function(){reject(new Error("audio playback"));};
+        var p=currentAudio.play();if(p&&p.catch)p.catch(reject);
+      });
+      return true;
     }catch(err){
       console.error(err);toast("Не удалось загрузить нейро-озвучку");
+      return false;
     }finally{
       if(button)button.classList.remove("loading");
     }
@@ -164,8 +178,212 @@
 
   function voiceText(item){
     if(item.kind==="listen")return {text:item.speechText||item.correct,language:item.speechLang||"en"};
-    var options=(item.options||[]).map(function(x,i){return ["A","B","C","D"][i]+": "+x;}).join(". ");
-    return {text:item.text+". Варианты ответа. "+options,language:"ru"};
+    var names=["Первый вариант","Второй вариант","Третий вариант","Четвёртый вариант"];
+    var options=(item.options||[]).map(function(x,i){return names[i]+": "+x;}).join(". ");
+    return {text:item.text+". "+options,language:"ru"};
+  }
+
+  function speechRecognitionCtor(){
+    return window.SpeechRecognition||window.webkitSpeechRecognition||null;
+  }
+
+  function normalizeSpoken(value){
+    return String(value||"").toLowerCase().replace(/ё/g,"е").replace(/[.,!?;:()[\]{}"'«»]/g," ").replace(/\s+/g," ").trim();
+  }
+
+  function tokenScore(a,b){
+    a=normalizeSpoken(a);b=normalizeSpoken(b);
+    if(!a||!b)return 0;
+    if(a===b)return 1;
+    if(a.length>3&&b.indexOf(a)>=0)return .92;
+    if(b.length>3&&a.indexOf(b)>=0)return .92;
+    var aa=new Set(a.split(" ").filter(function(x){return x.length>1;}));
+    var bb=new Set(b.split(" ").filter(function(x){return x.length>1;}));
+    var hit=0;aa.forEach(function(x){if(bb.has(x))hit++;});
+    return hit/Math.max(1,Math.min(aa.size,bb.size));
+  }
+
+  function parseSpoken(transcripts,item){
+    var all=(transcripts||[]).map(normalizeSpoken).filter(Boolean);
+    var joined=all.join(" | ");
+    if(/\b(стоп|остановись|закончить|завершить|выход)\b/.test(joined))return {command:"stop"};
+    if(/\b(повтори|повторить|еще раз|ещё раз|снова)\b/.test(joined))return {command:"repeat"};
+    if(/\b(дальше|следующий|следующая|пропустить|пропусти)\b/.test(joined))return {command:"next"};
+
+    var direct=[
+      ["а","a","эй","вариант а","первый","первая","первое","один","1"],
+      ["б","бэ","b","би","вариант б","второй","вторая","второе","два","2"],
+      ["в","вэ","с","си","c","цэ","вариант в","вариант с","третий","третья","третье","три","3"],
+      ["г","гэ","д","дэ","d","ди","вариант г","вариант д","четвертый","четвертая","четвертое","четвертый вариант","четыре","4"]
+    ];
+    for(var t=0;t<all.length;t++){
+      var phrase=all[t];
+      for(var i=0;i<Math.min(4,item.options.length);i++){
+        if(direct[i].some(function(x){return phrase===x||phrase==="вариант "+x;}))return {answer:i,heard:phrase};
+      }
+      if(item.kind==="truefalse"){
+        if(/^(да|правда|верно|правильно)$/.test(phrase)){
+          var pi=item.options.findIndex(function(x){return normalizeSpoken(x)==="правда";});
+          if(pi>=0)return {answer:pi,heard:phrase};
+        }
+        if(/^(нет|ложь|неправда|не верно|неверно)$/.test(phrase)){
+          var li=item.options.findIndex(function(x){return normalizeSpoken(x)==="ложь";});
+          if(li>=0)return {answer:li,heard:phrase};
+        }
+      }
+    }
+    var best={answer:-1,score:0,heard:all[0]||""};
+    all.forEach(function(phrase){
+      item.options.forEach(function(opt,i){
+        var score=tokenScore(phrase,opt);
+        if(score>best.score)best={answer:i,score:score,heard:phrase};
+      });
+    });
+    return best.score>=.56?best:{answer:-1,heard:all[0]||""};
+  }
+
+  function setCarStatus(kind,text,heard){
+    var el=document.querySelector("#v4-car-banner");
+    if(!el)return;
+    el.dataset.state=kind||"idle";
+    var main=el.querySelector("[data-car-status]");if(main)main.textContent=text||"";
+    var sub=el.querySelector("[data-car-heard]");if(sub)sub.textContent=heard||"";
+  }
+
+  function stopListening(){
+    listening=false;
+    if(recognition){
+      try{recognition.onend=null;recognition.onerror=null;recognition.onresult=null;recognition.stop();}catch(e){}
+      recognition=null;
+    }
+  }
+
+  async function requestMicrophone(){
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)return true;
+    var stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    stream.getTracks().forEach(function(t){t.stop();});
+    return true;
+  }
+
+  function startListening(){
+    if(!carMode||!activeSession)return;
+    var SR=speechRecognitionCtor();
+    if(!SR){toast("На этом браузере нет распознавания речи");stopCarMode();return;}
+    stopListening();
+    recognitionHandled=false;
+    recognition=new SR();
+    recognition.lang="ru-RU";
+    recognition.interimResults=false;
+    recognition.continuous=false;
+    recognition.maxAlternatives=5;
+    recognition.onstart=function(){listening=true;setCarStatus("listening","Слушаю ответ…","Можно сказать букву, номер или сам ответ");};
+    recognition.onresult=function(event){
+      recognitionHandled=true;listening=false;
+      var alternatives=[];
+      var result=event.results[event.results.length-1];
+      for(var i=0;i<result.length;i++)alternatives.push(result[i].transcript);
+      handleSpoken(alternatives);
+    };
+    recognition.onerror=function(event){
+      listening=false;
+      if(!carMode)return;
+      if(event.error==="not-allowed"||event.error==="service-not-allowed"){
+        toast("Нужен доступ к микрофону");stopCarMode();return;
+      }
+      if(event.error!=="aborted")setTimeout(function(){if(carMode)startListening();},500);
+    };
+    recognition.onend=function(){
+      listening=false;
+      if(carMode&&!recognitionHandled)setTimeout(function(){if(carMode)startListening();},450);
+    };
+    try{recognition.start();}catch(e){setTimeout(function(){if(carMode)startListening();},500);}
+  }
+
+  async function carAskCurrent(){
+    if(!carMode||!activeSession||activeSession.finished)return;
+    var seq=++carSequence;
+    var item=activeSession.questions[activeSession.index];
+    setCarStatus("speaking","Читаю вопрос…","");
+    if(item.kind==="listen"){
+      await playTts("Вопрос "+(activeSession.index+1)+". Слушай английское слово.","ru");
+      if(!carMode||seq!==carSequence)return;
+      await playTts(item.speechText||item.correct,item.speechLang||"en");
+      if(!carMode||seq!==carSequence)return;
+      var n=["Первый","Второй","Третий","Четвёртый"];
+      var opts=item.options.map(function(x,i){return n[i]+": "+x;}).join(". ");
+      await playTts("Что оно означает? "+opts,"ru");
+    }else{
+      var v=voiceText(item);
+      await playTts("Вопрос "+(activeSession.index+1)+". "+v.text,v.language);
+    }
+    if(carMode&&seq===carSequence)startListening();
+  }
+
+  async function handleSpoken(transcripts){
+    if(!carMode||!activeSession)return;
+    var item=activeSession.questions[activeSession.index];
+    var parsed=parseSpoken(transcripts,item);
+    var heard=parsed.heard||transcripts[0]||"";
+    if(parsed.command==="stop"){await playTts("Останавливаю голосовой режим.","ru");stopCarMode();renderHome();return;}
+    if(parsed.command==="repeat"){setCarStatus("speaking","Повторяю…",heard);carAskCurrent();return;}
+    if(parsed.command==="next"){
+      setCarStatus("speaking","Пропускаю вопрос…",heard);
+      await playTts("Хорошо, пропускаю.","ru");
+      if(!carMode)return;
+      activeSession.answers[activeSession.index]=-1;save();
+      nextQuestion();
+      return;
+    }
+    if(Number.isInteger(parsed.answer)&&parsed.answer>=0){
+      setCarStatus("thinking","Понял: "+item.options[parsed.answer],heard);
+      await handleCarAnswer(parsed.answer);
+      return;
+    }
+    setCarStatus("listening","Не расслышал ответ","Я услышал: "+heard);
+    await playTts("Не расслышал. Скажи первый, второй, третий, четвёртый, букву варианта или сам ответ.","ru");
+    if(carMode)startListening();
+  }
+
+  async function handleCarAnswer(index){
+    if(!carMode||!activeSession)return;
+    var session=activeSession,item=session.questions[session.index],last=session.index===9;
+    var correct=index===item.correctIndex;
+    answerQuestion(index);
+    var phrase=correct
+      ? "Правильно. "+item.explanation
+      : "Нет. Правильный ответ: "+item.correct+". "+item.explanation;
+    await playTts(phrase,"ru");
+    if(!carMode)return;
+    if(last){
+      nextQuestion();
+      var score=activeSession&&activeSession.score!=null?activeSession.score:session.answers.filter(function(a,i){return a===session.questions[i].correctIndex;}).length;
+      await playTts("Раунд закончен. "+score+" из десяти. Можно сказать стоп или посмотреть результат.","ru");
+      carMode=false;stopListening();return;
+    }
+    nextQuestion();
+  }
+
+  function stopCarMode(silent){
+    carMode=false;carSequence++;stopListening();
+    if(currentAudio){try{currentAudio.pause();currentAudio.currentTime=0;}catch(e){}}
+    currentAudio=null;
+    document.body.classList.remove("v4-car-mode");
+    if(!silent)toast("Голосовой режим выключен");
+  }
+
+  async function startCarMode(button){
+    var SR=speechRecognitionCtor();
+    if(!SR){toast("Голосовое управление не поддерживается этим браузером");return;}
+    try{
+      if(button)button.classList.add("loading");
+      await requestMicrophone();
+      carMode=true;carSequence++;
+      document.body.classList.add("v4-car-mode");
+      activeSession=makeSession();
+      renderQuiz();
+    }catch(err){
+      console.error(err);toast("Разреши доступ к микрофону для режима в машине");
+    }finally{if(button)button.classList.remove("loading");}
   }
 
   var KIND_META={
@@ -205,12 +423,15 @@
       }else{
         feedback="<p class=\"v4-note\">🔊 Нажми на динамик, чтобы вопрос прочитал нейро-голос.</p>";
       }
-      app.innerHTML=shell("<main class=\"quiz-main\"><div class=\"quiz-toolbar\"><button class=\"back-link\" data-action=\"home\">← На главную</button><div class=\"quiz-person\"><span>"+esc(profile().letter)+"</span>"+esc(profile().name)+"</div></div><section class=\"quiz-card v4-quiz\"><div class=\"v4-quiz-stage kind-"+esc(item.kind)+"\"><div class=\"quiz-progress-head\"><div><span>Вопрос "+(i+1)+"</span><b>"+(i+1)+" / 10</b></div><div class=\"progress-line\">"+progress+"</div></div><div class=\"v4-question\"><div class=\"v4-quiz-head\"><div class=\"v4-tags\"><span class=\"v4-type\">"+km[0]+" "+km[1]+"</span><span class=\"v4-cat\">"+esc(item.category)+"</span></div><button class=\"v4-voice\" data-action=\"speak\" aria-label=\"Озвучить\">🔊</button></div>"+head+"<div class=\"v4-answers "+(item.options.length===2?"two":"")+"\">"+answers+"</div>"+feedback+"</div></div></section></main>");
+      var carBanner=carMode?"<div class=\"v4-car-banner\" id=\"v4-car-banner\" data-state=\"idle\"><div class=\"v4-car-orb\"><span>🎙️</span><i></i><i></i><i></i></div><div><strong data-car-status>Голосовой режим включён</strong><small data-car-heard>Экран можно не трогать</small></div><button data-action=\"car-stop\" aria-label=\"Остановить голосовой режим\">×</button></div>":"";
+      app.innerHTML=shell("<main class=\"quiz-main\"><div class=\"quiz-toolbar\"><button class=\"back-link\" data-action=\"home\">← На главную</button><div class=\"quiz-person\"><span>"+esc(profile().letter)+"</span>"+esc(profile().name)+"</div></div>"+carBanner+"<section class=\"quiz-card v4-quiz\"><div class=\"v4-quiz-stage kind-"+esc(item.kind)+"\"><div class=\"quiz-progress-head\"><div><span>Вопрос "+(i+1)+"</span><b>"+(i+1)+" / 10</b></div><div class=\"progress-line\">"+progress+"</div></div><div class=\"v4-question\"><div class=\"v4-quiz-head\"><div class=\"v4-tags\"><span class=\"v4-type\">"+km[0]+" "+km[1]+"</span><span class=\"v4-cat\">"+esc(item.category)+"</span></div><button class=\"v4-voice\" data-action=\"speak\" aria-label=\"Озвучить\">🔊</button></div>"+head+"<div class=\"v4-answers "+(item.options.length===2?"two":"")+"\">"+answers+"</div>"+feedback+"</div></div></section></main>");
       wireCommon();
       var home=app.querySelector("[data-action=home]");if(home)home.onclick=renderHome;
-      app.querySelectorAll("[data-answer]").forEach(function(btn){btn.onclick=function(){answerQuestion(Number(btn.dataset.answer));};});
+      app.querySelectorAll("[data-answer]").forEach(function(btn){btn.onclick=function(){var n=Number(btn.dataset.answer);if(carMode)handleCarAnswer(n);else answerQuestion(n);};});
       app.querySelectorAll("[data-action=speak]").forEach(function(btn){btn.onclick=function(){var v=voiceText(item);playTts(v.text,v.language,btn);};});
       var next=app.querySelector("[data-action=next]");if(next)next.onclick=nextQuestion;
+      var stop=app.querySelector("[data-action=car-stop]");if(stop)stop.onclick=function(){stopCarMode();renderHome();};
+      if(carMode&&!answered)setTimeout(carAskCurrent,260);
     };
   }
 
@@ -227,6 +448,12 @@
       test.onclick=function(e){e.stopPropagation();playTts("Доброе утро, "+profile().name+". Нейро-озвучка работает. Готов к десяти вопросам?","ru",test);};
       today.appendChild(test);
     }
+    if(today&&!document.querySelector(".v4-drive-card")){
+      var drive=document.createElement("button");drive.className="v4-drive-card";
+      drive.innerHTML="<span class=\"v4-drive-icon\">🚗</span><span><b>Режим в машине</b><small>Один раз нажми — дальше только слушай и отвечай голосом</small></span><em>hands-free →</em>";
+      drive.onclick=function(){startCarMode(drive);};
+      today.insertAdjacentElement("afterend",drive);
+    }
     var stats=document.querySelector(".stats-grid");
     if(stats&&!document.querySelector(".v4-mechanics")){
       var strip=document.createElement("div");strip.className="v4-mechanics";
@@ -237,7 +464,7 @@
 
   function installHome(){
     var baseHome=renderHome;
-    renderHome=function(){baseHome();decorateHome();};
+    renderHome=function(){if(carMode)stopCarMode(true);baseHome();decorateHome();};
   }
 
   function boot(){
@@ -247,7 +474,7 @@
     extraQuestions().forEach(function(item){if(!bank.some(function(x){return x.id===item.id;}))bank.push(item);});
     bank.forEach(enrich);
     bankById=new Map(bank.map(function(x){return [x.id,x];}));
-    state.audio=state.audio||{provider:"ai-gateway"};
+    state.audio=state.audio||{provider:"microsoft-neural"};
     installSessionPicker();
     installQuizRenderer();
     installHome();
