@@ -478,10 +478,127 @@
     if(!silent)toast("Голосовой режим выключен");
   }
 
+  function aiStore(){
+    var s=pstats();
+    s.aiHistoryConcepts=s.aiHistoryConcepts||[];
+    s.aiHistoryTexts=s.aiHistoryTexts||[];
+    s.aiDaily=s.aiDaily||{};
+    return s;
+  }
+
+  function rememberAiQuestions(questions){
+    var s=aiStore(), concepts=new Set(s.aiHistoryConcepts), texts=new Set(s.aiHistoryTexts);
+    (questions||[]).forEach(function(q){
+      if(q.conceptKey)concepts.add(String(q.conceptKey).toLowerCase());
+      if(q.text)texts.add(String(q.text).trim());
+    });
+    s.aiHistoryConcepts=Array.from(concepts);
+    s.aiHistoryTexts=Array.from(texts);
+    save();
+  }
+
+  function aiQuestionToSession(q,r){
+    var kind=q.kind||"choices", opts=(q.options||[]).map(String);
+    var style=modes().answerMode;
+    if(kind==="match")style="match";
+    else if(["open","fill","clues"].indexOf(kind)>=0)style="open";
+    else if(kind==="listen"&&opts.length<2)style="open";
+    else if(style==="mix")style=(opts.length>=2&&r()>.30)?"choices":"open";
+    if(style==="match"&&kind!=="match")style=opts.length>=2?"choices":"open";
+    var correct=String(q.correct||"");
+    var correctIndex=opts.indexOf(correct);
+    if(style==="choices"&&correctIndex<0&&opts.length){
+      opts=[correct].concat(opts.filter(function(x){return x!==correct;})).slice(0,4);
+      opts=shuffle(opts,r);correctIndex=opts.indexOf(correct);
+    }
+    return Object.assign({},q,{
+      id:q.id||("ai-"+Math.random().toString(36).slice(2)),
+      family:"ai-"+(q.conceptKey||kind),
+      answerStyle:style,
+      options:opts,
+      correct:correct,
+      correctIndex:style==="match"?0:correctIndex,
+      matchSeed:Math.floor(r()*1e9),
+      hints:Array.isArray(q.hints)?q.hints:[],
+      acceptedAnswers:Array.isArray(q.acceptedAnswers)?q.acceptedAnswers:[]
+    });
+  }
+
+  async function prepareAiSession(){
+    var s=aiStore(),cfg=modes(),date=todayKey();
+    var cacheKey=[date,state.activeProfile,s.topic,s.challenge,cfg.questionMode,cfg.inputMode,cfg.answerMode].join("|");
+    if(s.aiDaily[cacheKey]&&s.aiDaily[cacheKey].length>=10){
+      var cached=s.aiDaily[cacheKey],r0=seeded("ai-session|"+cacheKey);
+      return buildAiSession(cached,r0,cacheKey);
+    }
+    try{
+      var response=await fetch("/api/generate-quiz",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          profile:profile().name,
+          age:profile().age,
+          topic:s.topic,
+          challenge:s.challenge,
+          count:10,
+          usedConcepts:s.aiHistoryConcepts,
+          usedTexts:s.aiHistoryTexts
+        })
+      });
+      if(!response.ok)throw new Error("AI "+response.status);
+      var data=await response.json();
+      if(!data.questions||data.questions.length<5)throw new Error("AI returned too few questions");
+      var qs=data.questions.slice(0,10);
+      s.aiDaily[cacheKey]=qs;
+      rememberAiQuestions(qs);
+      var r=seeded("ai-session|"+cacheKey);
+      return buildAiSession(qs,r,cacheKey);
+    }catch(err){
+      console.warn("Gemini unavailable, using local bank",err);
+      return null;
+    }
+  }
+
+  function buildAiSession(rawQuestions,r,cacheKey){
+    var s=pstats(),cfg=modes();
+    var questions=rawQuestions.slice(0,10).map(function(q){return aiQuestionToSession(q,r);});
+    while(questions.length<10){
+      var fallback=bank[Math.floor(r()*bank.length)];
+      if(!questions.some(function(x){return x.id===fallback.id;})){
+        var opts=shuffle([fallback.correct].concat(fallback.distractors||[]),r).slice(0,4);
+        questions.push(Object.assign({},fallback,{options:opts,correctIndex:opts.indexOf(fallback.correct),answerStyle:"choices"}));
+      }
+    }
+    var key="ai|"+cacheKey;
+    var session={key:key,date:todayKey(),profile:state.activeProfile,topic:s.topic,challenge:s.challenge,index:0,answers:[],questions:questions,finished:false,score:null,startedAt:Date.now(),v4:Object.assign({},cfg),ai:true,hints:{}};
+    s.sessions[key]=session;save();return session;
+  }
+
+  function fallbackHints(item){
+    if(item.hints&&item.hints.length)return item.hints.slice(0,3);
+    var h1="Обрати внимание на ключевые слова в вопросе.";
+    var h2=item.options&&item.options.length>1?"Попробуй сначала исключить вариант, который точно не подходит.":"Разбей задачу на один маленький шаг.";
+    var h3="Свяжи вопрос с темой «"+item.category+"» и вспомни главное правило или факт.";
+    return [h1,h2,h3];
+  }
+
+  function hintLevel(){
+    if(!activeSession)return 0;
+    activeSession.hints=activeSession.hints||{};
+    return Number(activeSession.hints[activeSession.index]||0);
+  }
+
+  function revealHint(){
+    if(!activeSession)return;
+    activeSession.hints=activeSession.hints||{};
+    var level=Number(activeSession.hints[activeSession.index]||0);
+    if(level<3)activeSession.hints[activeSession.index]=level+1;
+    save();renderQuiz();
+  }
+
   async function startVoiceControl(button){
     var cfg=modes(),needsMic=cfg.inputMode==="voice"||cfg.inputMode==="both";
     try{
-      if(button)button.classList.add("loading");
+      if(button){button.classList.add("loading");button.dataset.oldText=button.innerHTML;button.innerHTML="Готовлю новые вопросы…";}
       if(needsMic){
         var SR=speechRecognitionCtor();
         if(!SR){toast("На этом браузере нет голосового распознавания");return;}
@@ -490,18 +607,25 @@
       }else{
         carMode=false;document.body.classList.remove("v4-car-mode");
       }
-      activeSession=makeSession();renderQuiz();
+      activeSession=await prepareAiSession();
+      if(!activeSession)activeSession=makeSession();
+      renderQuiz();
     }catch(err){
-      console.error(err);toast("Разреши доступ к микрофону для голосового управления");
-    }finally{if(button)button.classList.remove("loading");}
+      console.error(err);toast("Не удалось запустить режим");
+    }finally{
+      if(button){button.classList.remove("loading");if(button.dataset.oldText)button.innerHTML=button.dataset.oldText;}
+    }
   }
 
-  var KIND_META={
   var KIND_META={
     listen:["🎧","НА СЛУХ"],truefalse:["⚡","ПРАВДА / ЛОЖЬ"],odd:["🧩","ЧТО ЛИШНЕЕ"],
     sequence:["🔢","ПРОДОЛЖИ РЯД"],scenario:["🧠","СИТУАЦИЯ"],timeline:["🕰️","ХРОНОЛОГИЯ"],
     number:["➗","БЫСТРЫЙ СЧЁТ"],map:["🧭","МИР"],lab:["🧪","НАУКА"],think:["◇","ПОДУМАЙ"],
-    puzzle:["💡","ЛОГИКА"],match:["🔗","СОЕДИНИ ПАРЫ"],choice:["✦","ВЫБОР"]
+    puzzle:["💡","ЛОГИКА"],match:["🔗","СОЕДИНИ ПАРЫ"],choices:["✦","ВЫБОР"],
+    open:["💬","БЕЗ ВАРИАНТОВ"],clues:["🕵️","УГАДАЙ ПО ПОДСКАЗКАМ"],closest:["🎯","БЛИЖЕ ВСЕГО"],
+    multiple:["☑️","НЕСКОЛЬКО ОТВЕТОВ"],order:["↕️","ПО ПОРЯДКУ"],fill:["✍️","ВСТАВЬ ПРОПУСК"],
+    compare:["⚖️","СРАВНИ"],rapid:["⚡","БЛИЦ"],estimate:["📏","ОЦЕНИ"],category:["🗂️","КЛАССИФИКАЦИЯ"],
+    "two-step":["🧠","ДВА ШАГА"],reverse:["↩️","ОТВЕТ НАОБОРОТ"],memory:["👁️","ПАМЯТЬ"],choice:["✦","ВЫБОР"]
   };
 
   var matchState=null;
@@ -510,13 +634,14 @@
   function openAnswerIndex(item,value){
     var phrase=normalizeSpoken(value);
     if(!phrase)return -1;
+    var accepted=[item.correct].concat(item.acceptedAnswers||[]);
+    if(accepted.some(function(x){return tokenScore(phrase,x)>.72;}))return item.correctIndex>=0?item.correctIndex:0;
     var best={index:-1,score:0};
-    item.options.forEach(function(opt,i){
+    (item.options||[]).forEach(function(opt,i){
       var score=tokenScore(phrase,opt);
       if(score>best.score)best={index:i,score:score};
     });
-    if(tokenScore(phrase,item.correct)>.55)return item.correctIndex;
-    return best.score>.55?best.index:-1;
+    return best.score>.58?best.index:-1;
   }
 
   function renderMatching(item,answered){
@@ -617,6 +742,13 @@
         }).join("")+"</div>";
       }
 
+      var hintHtml="";
+      if(!answered&&style!=="match"){
+        var hints=fallbackHints(item),hl=hintLevel();
+        var shown=hints.slice(0,hl).map(function(h,n){return "<div class=\"v4-hint-line\"><b>💡 "+(n+1)+"</b><span>"+esc(h)+"</span></div>";}).join("");
+        hintHtml="<div class=\"v4-hints\">"+shown+(hl<Math.min(3,hints.length)?"<button data-action=\"hint\">💡 Подсказка "+(hl+1)+"/3</button>":"")+"</div>";
+      }
+
       var feedback="";
       if(answered){
         var wrongPrefix=item.category==="Математика"?"":"Правильный ответ: <b>"+esc(item.correct)+"</b>. ";
@@ -627,7 +759,7 @@
       }
 
       var voiceBanner=carMode?"<div class=\"v4-car-banner\" id=\"v4-car-banner\" data-state=\"idle\"><div class=\"v4-car-orb\"><span>🎙️</span><i></i><i></i><i></i></div><div><strong data-car-status>Голосовое управление включено</strong><small data-car-heard>Можно отвечать, говорить «повтори», «дальше» или «стоп»</small></div><button data-action=\"car-stop\" aria-label=\"Остановить голосовой режим\">×</button></div>":"";
-      app.innerHTML=shell("<main class=\"quiz-main\"><div class=\"quiz-toolbar\"><button class=\"back-link\" data-action=\"home\">← На главную</button><div class=\"quiz-person\"><span>"+esc(profile().letter)+"</span>"+esc(profile().name)+"</div></div>"+voiceBanner+"<section class=\"quiz-card v4-quiz\"><div class=\"v4-quiz-stage kind-"+esc(item.kind)+"\"><div class=\"quiz-progress-head\"><div><span>Вопрос "+(i+1)+"</span><b>"+(i+1)+" / 10</b></div><div class=\"progress-line\">"+progress+"</div></div><div class=\"v4-question\"><div class=\"v4-quiz-head\"><div class=\"v4-tags\"><span class=\"v4-type\">"+km[0]+" "+km[1]+"</span><span class=\"v4-cat\">"+esc(item.category)+"</span></div><button class=\"v4-voice\" data-action=\"speak\" aria-label=\"Озвучить\">🔊</button></div>"+head+answerArea+feedback+"</div></div></section></main>");
+      app.innerHTML=shell("<main class=\"quiz-main\"><div class=\"quiz-toolbar\"><button class=\"back-link\" data-action=\"home\">← На главную</button><div class=\"quiz-person\"><span>"+esc(profile().letter)+"</span>"+esc(profile().name)+"</div></div>"+voiceBanner+"<section class=\"quiz-card v4-quiz\"><div class=\"v4-quiz-stage kind-"+esc(item.kind)+"\"><div class=\"quiz-progress-head\"><div><span>Вопрос "+(i+1)+"</span><b>"+(i+1)+" / 10</b></div><div class=\"progress-line\">"+progress+"</div></div><div class=\"v4-question\"><div class=\"v4-quiz-head\"><div class=\"v4-tags\"><span class=\"v4-type\">"+km[0]+" "+km[1]+"</span><span class=\"v4-cat\">"+esc(item.category)+"</span></div><button class=\"v4-voice\" data-action=\"speak\" aria-label=\"Озвучить\">🔊</button></div>"+head+answerArea+hintHtml+feedback+"</div></div></section></main>");
 
       wireCommon();
       var home=app.querySelector("[data-action=home]");if(home)home.onclick=function(){if(carMode)stopCarMode(true);renderHome();};
@@ -636,6 +768,7 @@
       var form=app.querySelector("[data-open-form]");if(form)form.onsubmit=function(e){e.preventDefault();submitOpenAnswer(form.querySelector("input").value);};
       app.querySelectorAll("[data-match-left]").forEach(function(btn){btn.onclick=function(){handleMatchLeft(Number(btn.dataset.matchLeft));};});
       app.querySelectorAll("[data-match-right]").forEach(function(btn){btn.onclick=function(){handleMatchRight(Number(btn.dataset.matchRight));};});
+      app.querySelectorAll("[data-action=hint]").forEach(function(btn){btn.onclick=revealHint;});
       var next=app.querySelector("[data-action=next]");if(next)next.onclick=nextQuestion;
       var stop=app.querySelector("[data-action=car-stop]");if(stop)stop.onclick=function(){stopCarMode();renderHome();};
       if(carMode&&!answered)setTimeout(carAskCurrent,260);else maybeAutoSpeak(item,answered);
