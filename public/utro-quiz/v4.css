@@ -112,3 +112,38 @@ body{
   .v4-home-hero .profile-chip{min-width:0;padding:7px}.v4-home-hero .profile-chip small{display:none}
   .v4-answers.two{grid-template-columns:1fr}.v4-answers.two .v4-answer{min-height:68px}
 }
+
+.v4-drive-card{
+  width:100%;margin-top:10px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.08);
+  color:#fff;border-radius:19px;padding:14px 16px;display:grid;grid-template-columns:44px minmax(0,1fr) auto;
+  gap:12px;align-items:center;text-align:left;transition:.18s ease
+}
+.v4-drive-card:hover{background:rgba(255,255,255,.13);transform:translateY(-2px)}
+.v4-drive-card.loading{opacity:.58;pointer-events:none}
+.v4-drive-icon{width:44px;height:44px;border-radius:14px;background:var(--u4-lime);display:grid;place-items:center;font-size:23px}
+.v4-drive-card b{display:block;font-size:14px}.v4-drive-card small{display:block;color:#b9cbd2;font-size:11px;line-height:1.35;margin-top:3px}
+.v4-drive-card em{font-style:normal;font-size:11px;font-weight:900;color:var(--u4-sun);white-space:nowrap}
+.v4-car-banner{
+  max-width:780px;margin:0 auto 12px;background:#102d3c;color:#fff;border-radius:20px;padding:13px 15px;
+  display:grid;grid-template-columns:52px minmax(0,1fr) 40px;gap:12px;align-items:center;
+  box-shadow:0 16px 45px rgba(16,45,60,.16)
+}
+.v4-car-banner>div:nth-child(2){min-width:0}.v4-car-banner strong{display:block;font-size:14px}.v4-car-banner small{display:block;color:#b8cbd3;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}
+.v4-car-banner>button{width:38px;height:38px;border:0;border-radius:12px;background:rgba(255,255,255,.1);color:#fff;font-size:22px}
+.v4-car-orb{width:50px;height:50px;border-radius:16px;background:#244b5c;display:flex;align-items:center;justify-content:center;gap:2px;position:relative}
+.v4-car-orb span{font-size:21px;position:absolute}.v4-car-orb i{width:3px;height:8px;border-radius:99px;background:var(--u4-lime);opacity:0}
+.v4-car-banner[data-state="listening"] .v4-car-orb{background:#23583d}
+.v4-car-banner[data-state="listening"] .v4-car-orb span{opacity:.18}
+.v4-car-banner[data-state="listening"] .v4-car-orb i{opacity:1;animation:v4wave .55s ease-in-out infinite alternate}
+.v4-car-banner[data-state="listening"] .v4-car-orb i:nth-of-type(2){animation-delay:.12s;height:16px}
+.v4-car-banner[data-state="listening"] .v4-car-orb i:nth-of-type(3){animation-delay:.24s;height:11px}
+.v4-car-banner[data-state="speaking"] .v4-car-orb{background:#6558bd}
+.v4-car-banner[data-state="thinking"] .v4-car-orb{background:#806428}
+@keyframes v4wave{to{height:24px}}
+.v4-car-mode .quiz-card.v4-quiz{box-shadow:0 20px 65px rgba(16,45,60,.13)}
+.v4-car-mode .v4-note:after{content:" Голосовой режим сам включит микрофон после вопроса."}
+@media(max-width:640px){
+  .v4-drive-card{grid-template-columns:42px minmax(0,1fr);padding:12px}.v4-drive-card em{display:none}
+  .v4-car-banner{grid-template-columns:46px minmax(0,1fr) 36px;padding:10px 11px;border-radius:17px}
+  .v4-car-orb{width:44px;height:44px}.v4-car-banner strong{font-size:13px}.v4-car-banner small{font-size:10px}
+}
