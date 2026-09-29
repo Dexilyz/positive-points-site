@@ -147,7 +147,8 @@
     state.v4=Object.assign({
       questionMode:"both",
       inputMode:"both",
-      answerMode:"mix"
+      answerMode:"mix",
+      roundSize:20
     },state.v4||{});
     return state.v4;
   }
@@ -528,11 +529,8 @@
 
   async function prepareAiSession(){
     var s=aiStore(),cfg=modes(),date=todayKey();
-    var cacheKey=[date,state.activeProfile,s.topic,s.challenge,cfg.questionMode,cfg.inputMode,cfg.answerMode].join("|");
-    if(s.aiDaily[cacheKey]&&s.aiDaily[cacheKey].length>=10){
-      var cached=s.aiDaily[cacheKey],r0=seeded("ai-session|"+cacheKey);
-      return buildAiSession(cached,r0,cacheKey);
-    }
+    s.aiRoundSeq=Number(s.aiRoundSeq||0)+1;
+    var cacheKey=[date,state.activeProfile,s.topic,s.challenge,cfg.questionMode,cfg.inputMode,cfg.answerMode,cfg.roundSize,s.aiRoundSeq].join("|");
     try{
       var response=await fetch("/api/generate-quiz",{
         method:"POST",headers:{"Content-Type":"application/json"},
@@ -541,7 +539,7 @@
           age:profile().age,
           topic:s.topic,
           challenge:s.challenge,
-          count:10,
+          count:Number(cfg.roundSize)||20,
           usedConcepts:s.aiHistoryConcepts,
           usedTexts:s.aiHistoryTexts
         })
@@ -549,7 +547,7 @@
       if(!response.ok)throw new Error("AI "+response.status);
       var data=await response.json();
       if(!data.questions||data.questions.length<5)throw new Error("AI returned too few questions");
-      var qs=data.questions.slice(0,10);
+      var qs=data.questions.slice(0,Number(cfg.roundSize)||20);
       s.aiDaily[cacheKey]=qs;
       rememberAiQuestions(qs);
       var r=seeded("ai-session|"+cacheKey);
@@ -562,8 +560,9 @@
 
   function buildAiSession(rawQuestions,r,cacheKey){
     var s=pstats(),cfg=modes();
-    var questions=rawQuestions.slice(0,10).map(function(q){return aiQuestionToSession(q,r);});
-    while(questions.length<10){
+    var target=Math.max(10,Math.min(30,Number(cfg.roundSize)||20));
+    var questions=rawQuestions.slice(0,target).map(function(q){return aiQuestionToSession(q,r);});
+    while(questions.length<target){
       var fallback=bank[Math.floor(r()*bank.length)];
       if(!questions.some(function(x){return x.id===fallback.id;})){
         var opts=shuffle([fallback.correct].concat(fallback.distractors||[]),r).slice(0,4);
@@ -761,6 +760,7 @@
       selectedAnswer=Number.isInteger(answer)?answer:null;
       var answered=selectedAnswer!==null,correct=answered&&selectedAnswer===item.correctIndex,style=item.answerStyle||cfg.answerMode;
       var km=KIND_META[item.kind]||KIND_META.choice;
+      var total=session.questions.length;
       var progress=session.questions.map(function(x,n){
         var cls=n<i?(session.answers[n]===session.questions[n].correctIndex?"ok":"bad"):(n===i?"now":"");
         return "<i class=\""+cls+"\"></i>";
@@ -810,7 +810,7 @@
       }
 
       var voiceBanner=carMode?"<div class=\"v4-car-banner\" id=\"v4-car-banner\" data-state=\"idle\"><div class=\"v4-car-orb\"><span>🎙️</span><i></i><i></i><i></i></div><div><strong data-car-status>Голосовое управление включено</strong><small data-car-heard>Можно отвечать, говорить «повтори», «дальше» или «стоп»</small></div><button data-action=\"car-stop\" aria-label=\"Остановить голосовой режим\">×</button></div>":"";
-      app.innerHTML=shell("<main class=\"quiz-main\"><div class=\"quiz-toolbar\"><button class=\"back-link\" data-action=\"home\">← На главную</button><div class=\"quiz-person\"><span>"+esc(profile().letter)+"</span>"+esc(profile().name)+"</div></div>"+voiceBanner+"<section class=\"quiz-card v4-quiz\"><div class=\"v4-quiz-stage kind-"+esc(item.kind)+"\"><div class=\"quiz-progress-head\"><div><span>Вопрос "+(i+1)+"</span><b>"+(i+1)+" / 10</b></div><div class=\"progress-line\">"+progress+"</div></div><div class=\"v4-question\"><div class=\"v4-quiz-head\"><div class=\"v4-tags\"><span class=\"v4-type\">"+km[0]+" "+km[1]+"</span><span class=\"v4-cat\">"+esc(item.category)+"</span></div><button class=\"v4-voice\" data-action=\"speak\" aria-label=\"Озвучить\">🔊</button></div>"+head+answerArea+hintHtml+feedback+"</div></div></section></main>");
+      app.innerHTML=shell("<main class=\"quiz-main\"><div class=\"quiz-toolbar\"><button class=\"back-link\" data-action=\"home\">← На главную</button><div class=\"quiz-person\"><span>"+esc(profile().letter)+"</span>"+esc(profile().name)+"</div></div>"+voiceBanner+"<section class=\"quiz-card v4-quiz\"><div class=\"v4-quiz-stage kind-"+esc(item.kind)+"\"><div class=\"quiz-progress-head\"><div><span>Вопрос "+(i+1)+"</span><b>"+(i+1)+" / "+total+"</b></div><div class=\"progress-line\">"+progress+"</div></div><div class=\"v4-question\"><div class=\"v4-quiz-head\"><div class=\"v4-tags\"><span class=\"v4-type\">"+km[0]+" "+km[1]+"</span><span class=\"v4-cat\">"+esc(item.category)+"</span></div><button class=\"v4-voice\" data-action=\"speak\" aria-label=\"Озвучить\">🔊</button></div>"+head+answerArea+hintHtml+feedback+"</div></div></section></main>");
 
       wireCommon();
       var home=app.querySelector("[data-action=home]");if(home)home.onclick=function(){if(carMode)stopCarMode(true);renderHome();};
@@ -872,6 +872,11 @@
           modeButton("inputMode","voice","🎙️ Голосом",cfg.inputMode==="voice")+
           modeButton("inputMode","both","👆🎙️ Оба",cfg.inputMode==="both")+
         "</div></div>"+
+        "<div class=\"v4-mode-row\"><span><b>Длина</b><small>сколько вопросов в раунде</small></span><div>"+
+          modeButton("roundSize","10","10",Number(cfg.roundSize)===10)+
+          modeButton("roundSize","20","20",Number(cfg.roundSize)===20)+
+          modeButton("roundSize","30","30",Number(cfg.roundSize)===30)+
+        "</div></div>"+
         "<div class=\"v4-mode-row\"><span><b>Формат</b><small>какой тип ответа</small></span><div>"+
           modeButton("answerMode","mix","🎲 Микс",cfg.answerMode==="mix")+
           modeButton("answerMode","choices","🔤 A‑B‑C‑D",cfg.answerMode==="choices")+
@@ -880,7 +885,11 @@
         "</div></div>";
       today.insertAdjacentElement("afterend",builder);
       builder.querySelectorAll("[data-mode-group]").forEach(function(btn){
-        btn.onclick=function(){setMode(btn.dataset.modeGroup,btn.dataset.modeValue);renderHome();};
+        btn.onclick=function(){
+          var value=btn.dataset.modeValue;
+          if(btn.dataset.modeGroup==="roundSize")value=Number(value);
+          setMode(btn.dataset.modeGroup,value);renderHome();
+        };
       });
       builder.querySelectorAll("[data-preset]").forEach(function(btn){
         btn.onclick=function(){applyPreset(btn.dataset.preset);renderHome();};
@@ -895,6 +904,35 @@
     }
   }
 
+
+  function installDynamicRound(){
+    nextQuestion=function(){
+      var s=activeSession,total=s.questions.length;
+      if(s.index<total-1){s.index++;save();renderQuiz();scrollTo({top:0,behavior:"auto"});return;}
+      s.finished=true;
+      s.score=s.answers.filter(function(a,i){return a===s.questions[i].correctIndex;}).length;
+      s.finishedAt=Date.now();
+      var hist=pstats().history,normalized=Math.round((s.score/Math.max(1,total))*10);
+      hist[s.date]=Math.max(hist[s.date]||0,normalized);save();renderResult();
+    };
+
+    renderResult=function(){
+      view="result";
+      var s=activeSession,total=s.questions.length;
+      var score=s.score!=null?s.score:s.answers.filter(function(a,i){return a===s.questions[i].correctIndex;}).length;
+      var ratio=score/Math.max(1,total);
+      var title=ratio===1?"Идеально. "+score+" из "+total+"!":ratio>=.8?"Очень сильный раунд!":ratio>=.6?"Хороший результат!":"Есть что добрать — следующий раунд будет умнее.";
+      app.innerHTML=shell("<main class=\"result-main\"><section class=\"result-card\"><div class=\"result-orbit\"><div class=\"score-ball\"><strong>"+score+"</strong><span>из "+total+"</span></div><span class=\"spark s1\">✦</span><span class=\"spark s2\">✳</span><span class=\"spark s3\">✦</span></div><span class=\"tiny-label\">РАУНД ГОТОВ</span><h1>"+title+"</h1><p>"+(ratio>=.8?"Сложность подрастёт там, где ответы уверенные.":"Ошибки учтены — следующий набор подстроится точнее.")+"</p><div class=\"result-row\">"+s.questions.map(function(q,i){return "<span class=\""+(s.answers[i]===q.correctIndex?"ok":"bad")+"\">"+(s.answers[i]===q.correctIndex?"✓":"×")+"</span>";}).join("")+"</div><div class=\"result-actions\"><button class=\"start-btn\" data-action=\"home\">На главную</button><button class=\"secondary-btn\" data-action=\"retry\">Ещё "+Number(modes().roundSize||20)+" новых</button></div></section></main>");
+      wireCommon();
+      app.querySelector("[data-action=home]").onclick=renderHome;
+      app.querySelector("[data-action=retry]").onclick=async function(){
+        var btn=this;btn.disabled=true;btn.textContent="Генерирую новый раунд…";
+        activeSession=await prepareAiSession();
+        if(!activeSession)activeSession=makeSession();
+        renderQuiz();
+      };
+    };
+  }
 
   function installHome(){
     var baseHome=renderHome;
@@ -911,6 +949,7 @@
     bankById=new Map(bank.map(function(x){return [x.id,x];}));
     state.audio=state.audio||{provider:"microsoft-neural"};
     installSessionPicker();
+    installDynamicRound();
     installQuizRenderer();
     installHome();
     renderHome();
