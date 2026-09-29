@@ -3,7 +3,7 @@ import { gateway } from '@ai-sdk/gateway';
 
 export default async function handler(req, res) {
   if (req.method === 'GET') {
-    return res.status(200).json({ ok: true, model: 'google/gemini-3.8-flash-lite-tts' });
+    return res.status(200).json({ ok: true, model: 'openai/tts-1-hd' });
   }
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'GET, POST');
@@ -16,15 +16,13 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Invalid text' });
     }
 
-    const voice = language.startsWith('en') ? 'Puck' : 'Achird';
     const result = await generateSpeech({
-      model: gateway.speechModel('google/gemini-3.8-flash-lite-tts'),
+      model: gateway.speechModel('openai/tts-1-hd'),
       text: text.trim(),
-      voice,
-      outputFormat: 'wav',
+      voice: language.startsWith('en') ? 'nova' : 'alloy',
     });
 
-    res.setHeader('Content-Type', 'audio/wav');
+    res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400');
     return res.status(200).send(Buffer.from(result.audio.uint8Array));
   } catch (error) {
