@@ -220,3 +220,24 @@ body.v4-car-mode .v4-car-banner strong::first-letter{text-transform:uppercase}
 }
 .v4-hint-line b{font-size:11px;color:#7e671c;white-space:nowrap}.v4-hint-line span{font-size:12px;line-height:1.45;color:#5a6570}
 .v4-start.loading{opacity:.7;pointer-events:none}
+
+.v4-multiple{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.v4-multi-option{
+  min-height:64px;border:1.5px solid #dce3df;background:#fff;border-radius:16px;padding:11px 13px;
+  display:grid;grid-template-columns:30px minmax(0,1fr);gap:9px;align-items:center;text-align:left
+}
+.v4-multi-option>span{width:28px;height:28px;border-radius:9px;background:#f0f3ef;display:grid;place-items:center;font-weight:900}
+.v4-multi-option.selected{background:#eef9df;border-color:#75b86a}.v4-multi-option.selected>span{background:#75b86a;color:#fff}
+.v4-check-special{
+  margin-top:11px;width:100%;min-height:48px;border:0;border-radius:15px;background:var(--u4-ink);color:#fff;font-weight:900
+}
+.v4-order{display:grid;gap:10px}.v4-order-title{font-size:10px;letter-spacing:1.2px;color:var(--muted);font-weight:900}
+.v4-order-picked,.v4-order-pool{display:flex;gap:8px;flex-wrap:wrap;min-height:50px}
+.v4-order-picked{background:#f7faf7;border:1px dashed #ced8d2;border-radius:16px;padding:9px}
+.v4-order-picked small{color:var(--muted);align-self:center}
+.v4-order-chip{
+  border:1.5px solid #dce3df;background:#fff;border-radius:13px;padding:9px 11px;font-size:12px;font-weight:850
+}
+.v4-order-chip.chosen{background:#edf6ff;border-color:#82bddd;display:flex;align-items:center;gap:7px}
+.v4-order-chip.chosen span{width:22px;height:22px;border-radius:7px;background:#82bddd;color:#fff;display:grid;place-items:center;font-size:10px}
+@media(max-width:640px){.v4-multiple{grid-template-columns:1fr}}
