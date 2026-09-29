@@ -1,43 +1,18 @@
-function splitText(text, max = 180) {
-  const clean = String(text).replace(/\s+/g, ' ').trim();
-  if (clean.length <= max) return [clean];
-  const out = [];
-  let rest = clean;
-  while (rest.length > max) {
-    let cut = rest.lastIndexOf(' ', max);
-    if (cut < max * 0.55) cut = max;
-    out.push(rest.slice(0, cut).trim());
-    rest = rest.slice(cut).trim();
-  }
-  if (rest) out.push(rest);
-  return out;
-}
+import { EdgeTTS } from '@travisvn/edge-tts';
 
-async function googleTts(text, language) {
-  const lang = String(language || 'ru').toLowerCase().startsWith('en') ? 'en' : 'ru';
-  const chunks = splitText(text);
-  const parts = [];
-  for (const chunk of chunks) {
-    const url = new URL('https://translate.google.com/translate_tts');
-    url.searchParams.set('ie', 'UTF-8');
-    url.searchParams.set('client', 'tw-ob');
-    url.searchParams.set('tl', lang);
-    url.searchParams.set('q', chunk);
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Accept': 'audio/mpeg,*/*;q=0.8'
-      }
-    });
-    if (!response.ok) throw new Error('TTS upstream ' + response.status);
-    parts.push(Buffer.from(await response.arrayBuffer()));
-  }
-  return Buffer.concat(parts);
+function voiceFor(language, profile) {
+  if (String(language || '').toLowerCase().startsWith('en')) return 'en-US-AndrewMultilingualNeural';
+  if (profile === 'papa') return 'ru-RU-DmitryNeural';
+  return 'ru-RU-SvetlanaNeural';
 }
 
 export default async function handler(req, res) {
   if (req.method === 'GET') {
-    return res.status(200).json({ ok: true, provider: 'google-tts' });
+    return res.status(200).json({
+      ok: true,
+      provider: 'microsoft-neural',
+      voices: ['ru-RU-DmitryNeural','ru-RU-SvetlanaNeural','en-US-AndrewMultilingualNeural']
+    });
   }
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'GET, POST');
@@ -45,16 +20,22 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { text, language = 'ru' } = req.body || {};
-    if (typeof text !== 'string' || !text.trim() || text.length > 1200) {
+    const { text, language = 'ru', profile = 'elisey' } = req.body || {};
+    if (typeof text !== 'string' || !text.trim() || text.length > 1800) {
       return res.status(400).json({ error: 'Invalid text' });
     }
-    const audio = await googleTts(text.trim(), language);
+
+    const voice = voiceFor(language, profile);
+    const tts = new EdgeTTS(text.trim(), voice);
+    const result = await tts.synthesize();
+    const audio = Buffer.from(await result.audio.arrayBuffer());
+
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400');
+    res.setHeader('X-Utro-Voice', voice);
     return res.status(200).send(audio);
   } catch (error) {
-    console.error('TTS error', error);
+    console.error('Neural TTS error', error);
     return res.status(502).json({ error: 'Speech generation failed' });
   }
 }
