@@ -1,0 +1,34 @@
+import { experimental_generateSpeech as generateSpeech } from 'ai';
+import { gateway } from '@ai-sdk/gateway';
+
+export default async function handler(req, res) {
+  if (req.method === 'GET') {
+    return res.status(200).json({ ok: true, model: 'google/gemini-3.8-flash-lite-tts' });
+  }
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'GET, POST');
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    const { text, language = 'ru' } = req.body || {};
+    if (typeof text !== 'string' || !text.trim() || text.length > 1200) {
+      return res.status(400).json({ error: 'Invalid text' });
+    }
+
+    const voice = language.startsWith('en') ? 'Puck' : 'Achird';
+    const result = await generateSpeech({
+      model: gateway.speechModel('google/gemini-3.8-flash-lite-tts'),
+      text: text.trim(),
+      voice,
+      outputFormat: 'wav',
+    });
+
+    res.setHeader('Content-Type', 'audio/wav');
+    res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400');
+    return res.status(200).send(Buffer.from(result.audio.uint8Array));
+  } catch (error) {
+    console.error('TTS error', error);
+    return res.status(500).json({ error: 'Speech generation failed' });
+  }
+}
