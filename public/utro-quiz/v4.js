@@ -501,6 +501,8 @@
     var kind=q.kind||"choices", opts=(q.options||[]).map(String);
     var style=modes().answerMode;
     if(kind==="match")style="match";
+    else if(kind==="multiple")style="multiple";
+    else if(kind==="order")style="order";
     else if(["open","fill","clues"].indexOf(kind)>=0)style="open";
     else if(kind==="listen"&&opts.length<2)style="open";
     else if(style==="mix")style=(opts.length>=2&&r()>.30)?"choices":"open";
@@ -517,7 +519,7 @@
       answerStyle:style,
       options:opts,
       correct:correct,
-      correctIndex:style==="match"?0:correctIndex,
+      correctIndex:(style==="match"||style==="multiple"||style==="order")?1:correctIndex,
       matchSeed:Math.floor(r()*1e9),
       hints:Array.isArray(q.hints)?q.hints:[],
       acceptedAnswers:Array.isArray(q.acceptedAnswers)?q.acceptedAnswers:[]
@@ -574,6 +576,7 @@
   }
 
   function fallbackHints(item){
+    if(item.kind==="clues"&&item.clueLines&&item.clueLines.length)return item.clueLines.slice(0,3);
     if(item.hints&&item.hints.length)return item.hints.slice(0,3);
     var h1="Обрати внимание на ключевые слова в вопросе.";
     var h2=item.options&&item.options.length>1?"Попробуй сначала исключить вариант, который точно не подходит.":"Разбей задачу на один маленький шаг.";
@@ -629,6 +632,8 @@
   };
 
   var matchState=null;
+  var multiState={};
+  var orderState={};
   var lastAutoQuestionKey="";
 
   function openAnswerIndex(item,value){
@@ -677,6 +682,48 @@
     }else{
       matchState.mistakes++;matchState.left=null;toast("Не эта пара — попробуй ещё");renderQuiz();
     }
+  }
+
+  function specialKey(item){return (activeSession?activeSession.key:"")+"|"+(activeSession?activeSession.index:0)+"|"+item.id;}
+
+  function renderMultiple(item,answered){
+    var key=specialKey(item),selected=multiState[key]||[];
+    return "<div class=\"v4-multiple\">"+(item.options||[]).map(function(opt,i){
+      var on=selected.indexOf(i)>=0;
+      return "<button class=\"v4-multi-option "+(on?"selected":"")+"\" data-multi=\""+i+"\" "+(answered?"disabled":"")+"><span>"+(on?"✓":"")+"</span><b>"+esc(opt)+"</b></button>";
+    }).join("")+"</div>"+(!answered?"<button class=\"v4-check-special\" data-action=\"check-multiple\">Проверить выбранные</button>":"");
+  }
+
+  function toggleMultiple(index){
+    var item=activeSession.questions[activeSession.index],key=specialKey(item),arr=multiState[key]||[];
+    var pos=arr.indexOf(index);if(pos>=0)arr.splice(pos,1);else arr.push(index);
+    multiState[key]=arr;renderQuiz();
+  }
+
+  function checkMultiple(){
+    var s=activeSession,item=s.questions[s.index],key=specialKey(item),selected=(multiState[key]||[]).map(function(i){return normalizeSpoken(item.options[i]);}).sort();
+    var expected=(item.multipleCorrect||[]).map(normalizeSpoken).sort();
+    if(!selected.length)return toast("Выбери хотя бы один вариант");
+    var correct=selected.length===expected.length&&selected.every(function(x,i){return x===expected[i];});
+    s.answers[s.index]=correct?1:0;updateSkill(item,correct);pstats().seen.push(item.id);save();renderQuiz();
+  }
+
+  function renderOrder(item,answered){
+    var key=specialKey(item),seed=seeded("order-ui|"+item.id+"|"+item.matchSeed);
+    var pool=shuffle((item.items||[]).slice(),seed),chosen=orderState[key]||[];
+    var remaining=pool.filter(function(x){return chosen.indexOf(x)<0;});
+    var chosenHtml=chosen.map(function(x,i){return "<button class=\"v4-order-chip chosen\" data-order-remove=\""+i+"\" "+(answered?"disabled":"")+"><span>"+(i+1)+"</span>"+esc(x)+"</button>";}).join("");
+    var poolHtml=remaining.map(function(x){return "<button class=\"v4-order-chip\" data-order-add=\""+esc(x).replace(/"/g,"&quot;")+"\" "+(answered?"disabled":"")+">"+esc(x)+"</button>";}).join("");
+    return "<div class=\"v4-order\"><div class=\"v4-order-title\">ТВОЙ ПОРЯДОК</div><div class=\"v4-order-picked\">"+(chosenHtml||"<small>Нажимай элементы снизу по порядку</small>")+"</div><div class=\"v4-order-pool\">"+poolHtml+"</div></div>"+(!answered?"<button class=\"v4-check-special\" data-action=\"check-order\">Проверить порядок</button>":"");
+  }
+
+  function addOrder(value){var item=activeSession.questions[activeSession.index],key=specialKey(item);orderState[key]=orderState[key]||[];if(orderState[key].indexOf(value)<0)orderState[key].push(value);renderQuiz();}
+  function removeOrder(index){var item=activeSession.questions[activeSession.index],key=specialKey(item);orderState[key]=orderState[key]||[];orderState[key].splice(index,1);renderQuiz();}
+  function checkOrder(){
+    var s=activeSession,item=s.questions[s.index],key=specialKey(item),chosen=orderState[key]||[],expected=item.correctOrder||[];
+    if(chosen.length!==expected.length)return toast("Расставь все элементы");
+    var correct=chosen.every(function(x,i){return normalizeSpoken(x)===normalizeSpoken(expected[i]);});
+    s.answers[s.index]=correct?1:0;updateSkill(item,correct);pstats().seen.push(item.id);save();renderQuiz();
   }
 
   function submitOpenAnswer(value){
@@ -732,6 +779,10 @@
       var answerArea="";
       if(style==="match"){
         answerArea=renderMatching(item,answered);
+      }else if(style==="multiple"){
+        answerArea=renderMultiple(item,answered);
+      }else if(style==="order"){
+        answerArea=renderOrder(item,answered);
       }else if(style==="open"){
         answerArea=answered?"":("<form class=\"v4-open-answer\" data-open-form><input type=\"text\" autocomplete=\"off\" placeholder=\"Напиши или скажи ответ…\" aria-label=\"Ответ\"><button type=\"submit\">Ответить</button></form>");
       }else{
@@ -754,7 +805,7 @@
         var wrongPrefix=item.category==="Математика"?"":"Правильный ответ: <b>"+esc(item.correct)+"</b>. ";
         feedback="<div class=\"feedback v4-feedback "+(correct?"good":"oops")+"\"><strong>"+(correct?"Да! Именно так.":"Не совсем.")+"</strong><p>"+(correct?"":wrongPrefix)+esc(item.explanation)+"</p></div><button class=\"continue-btn\" data-action=\"next\">"+(i===9?"Показать результат":"Следующий вопрос")+" <span>→</span></button>";
       }else{
-        var hint=style==="open"?"Без подсказок: напиши ответ или скажи его голосом.":style==="match"?"Соедини каждую карточку слева с правильной справа.":"Можно выбрать кнопку или сказать букву/сам ответ.";
+        var hint=style==="open"?"Напиши ответ или скажи его голосом.":style==="match"?"Соедини каждую карточку слева с правильной справа.":style==="multiple"?"Здесь может быть больше одного правильного варианта.":style==="order"?"Нажимай элементы в правильной последовательности.":"Можно выбрать кнопку или сказать букву/сам ответ.";
         feedback="<p class=\"v4-note\">"+hint+"</p>";
       }
 
@@ -768,6 +819,11 @@
       var form=app.querySelector("[data-open-form]");if(form)form.onsubmit=function(e){e.preventDefault();submitOpenAnswer(form.querySelector("input").value);};
       app.querySelectorAll("[data-match-left]").forEach(function(btn){btn.onclick=function(){handleMatchLeft(Number(btn.dataset.matchLeft));};});
       app.querySelectorAll("[data-match-right]").forEach(function(btn){btn.onclick=function(){handleMatchRight(Number(btn.dataset.matchRight));};});
+      app.querySelectorAll("[data-multi]").forEach(function(btn){btn.onclick=function(){toggleMultiple(Number(btn.dataset.multi));};});
+      var multiCheck=app.querySelector("[data-action=check-multiple]");if(multiCheck)multiCheck.onclick=checkMultiple;
+      app.querySelectorAll("[data-order-add]").forEach(function(btn){btn.onclick=function(){addOrder(btn.dataset.orderAdd);};});
+      app.querySelectorAll("[data-order-remove]").forEach(function(btn){btn.onclick=function(){removeOrder(Number(btn.dataset.orderRemove));};});
+      var orderCheck=app.querySelector("[data-action=check-order]");if(orderCheck)orderCheck.onclick=checkOrder;
       app.querySelectorAll("[data-action=hint]").forEach(function(btn){btn.onclick=revealHint;});
       var next=app.querySelector("[data-action=next]");if(next)next.onclick=nextQuestion;
       var stop=app.querySelector("[data-action=car-stop]");if(stop)stop.onclick=function(){stopCarMode();renderHome();};
@@ -834,7 +890,7 @@
     var stats=document.querySelector(".stats-grid");
     if(stats&&!document.querySelector(".v4-mechanics")){
       var strip=document.createElement("div");strip.className="v4-mechanics";
-      strip.innerHTML="<span>💬 свободный ответ</span><span>🔗 соедини пары</span><span>🎧 только слушать</span><span>🎙️ голосом</span><span>⚡ правда / ложь</span><span>🧩 что лишнее</span><span>🕰️ хронология</span>";
+      strip.innerHTML="<span>💬 свободный ответ</span><span>🔗 соедини пары</span><span>☑️ несколько ответов</span><span>↕️ по порядку</span><span>🕵️ угадай по подсказкам</span><span>🎯 ближе всего</span><span>✍️ вставь пропуск</span><span>⚖️ сравни</span><span>⚡ блиц</span><span>📏 оцени</span><span>🗂️ классификация</span><span>🧠 два шага</span><span>↩️ наоборот</span><span>👁️ память</span><span>🎧 только слушать</span><span>🎙️ голосом</span><span>✅ правда / ложь</span><span>🧩 что лишнее</span>";
       stats.parentNode.insertBefore(strip,stats);
     }
   }
