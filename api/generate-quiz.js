@@ -56,7 +56,7 @@ export default async function handler(req, res) {
   const challenge = String(body.challenge || 'normal').slice(0, 20);
   const usedConcepts = cleanList(body.usedConcepts, 1000);
   const usedTexts = cleanList(body.usedTexts, 160);
-  const count = Math.max(5, Math.min(12, Number(body.count) || 10));
+  const count = Math.max(5, Math.min(30, Number(body.count) || 20));
 
   const allowedKinds = [
     'choices','open','truefalse','odd','sequence','clues','closest','multiple',
