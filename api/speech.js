@@ -2,6 +2,15 @@ import { experimental_generateSpeech as generateSpeech } from 'ai';
 import { gateway } from '@ai-sdk/gateway';
 
 export default async function handler(req, res) {
+  if (req.method === 'GET' && req.query?.probe === '859a4273072e6f66') {
+    try {
+      const probe = await generateSpeech({ model: gateway.speechModel('openai/tts-1-hd'), text: 'ok', voice: 'alloy' });
+      return res.status(200).json({ ok: true, bytes: probe.audio.uint8Array.length, model: 'openai/tts-1-hd' });
+    } catch (error) {
+      console.error('TTS probe error', error);
+      return res.status(500).json({ ok: false, error: 'probe failed' });
+    }
+  }
   if (req.method === 'GET') {
     return res.status(200).json({ ok: true, model: 'openai/tts-1-hd' });
   }
