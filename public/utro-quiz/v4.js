@@ -66,6 +66,52 @@
     return out;
   }
 
+  function matchQuestion(id,category,difficulty,title,pairs,explanation){
+    return {
+      id:id,category:category,difficulty:difficulty,text:title,correct:"Готово",distractors:[],
+      explanation:explanation||"Все пары соединены правильно.",kind:"match",family:"match-"+category,
+      icon:"🔗",pairs:pairs.map(function(p){return {left:String(p[0]),right:String(p[1])};})
+    };
+  }
+
+  function matchingQuestions(){
+    var out=[];
+    for(var g=0;g<6;g++){
+      var gp=countries.slice(g*4,g*4+4);
+      if(gp.length===4)out.push(matchQuestion("v4-match-geo-"+g,"География",2,"Соедини страну и столицу",gp.map(function(x){return [x[0],x[1]];}),"Страны соединены со своими столицами."));
+    }
+    for(var s=0;s<6;s++){
+      var ep=elements.slice(s*4,s*4+4);
+      if(ep.length===4)out.push(matchQuestion("v4-match-sci-"+s,"Наука",2.5,"Соедини элемент и символ",ep.map(function(x){return [x[1],x[0]];}),"Каждый химический элемент соединён со своим символом."));
+    }
+    for(var e=0;e<8;e++){
+      var wp=englishWords.slice(e*4,e*4+4);
+      if(wp.length===4)out.push(matchQuestion("v4-match-eng-"+e,"Английский",2.5,"Соедини слово и значение",wp.map(function(x){return [x[0],x[1]];}),"Английские слова соединены с переводом."));
+    }
+    for(var h=0;h<6;h++){
+      var hp=events.slice(h*4,h*4+4);
+      if(hp.length===4)out.push(matchQuestion("v4-match-hist-"+h,"История",3,"Соедини событие и год",hp.map(function(x){return [x[0],String(x[1])];}),"События соединены с годами."));
+    }
+    for(var m=0;m<8;m++){
+      var base=3+m;
+      out.push(matchQuestion("v4-match-math-"+m,"Математика",2,"Соедини выражение и результат",[
+        [base+" × 2",String(base*2)],[base+" + 7",String(base+7)],[(base+8)+" − 3",String(base+5)],[String(base*3)+" ÷ 3",String(base)]
+      ],"Каждое выражение соединено со своим результатом."));
+    }
+    var general=[
+      [["CPU","процессор"],["RAM","оперативная память"],["URL","адрес страницы"],["VPN","защищённое сетевое соединение"]],
+      [["JPEG","формат изображения"],["MP3","формат аудио"],["PDF","формат документа"],["ZIP","архив"]],
+      [["Bluetooth","беспроводная связь рядом"],["Wi‑Fi","беспроводная сеть"],["GPS","определение местоположения"],["NFC","связь на очень близком расстоянии"]]
+    ];
+    general.forEach(function(pairs,i){out.push(matchQuestion("v4-match-gen-"+i,"Общие знания",2.5,"Соедини термин и значение",pairs,"Термины соединены с их значениями."));});
+    var philosophy=[
+      [["Факт","можно проверить"],["Мнение","личная оценка"],["Аргумент","причина в поддержку вывода"],["Доказательство","данные в поддержку утверждения"]],
+      [["Причина","то, что вызывает результат"],["Следствие","результат причины"],["Предположение","идея без полной проверки"],["Вывод","итог рассуждения"]]
+    ];
+    philosophy.forEach(function(pairs,i){out.push(matchQuestion("v4-match-phil-"+i,"Философия",3,"Соедини понятие и смысл",pairs,"Понятия соединены с определениями."));});
+    return out;
+  }
+
   function inferKind(item){
     if(item.kind)return item.kind;
     var id=item.id||"", text=item.text||"";
@@ -97,6 +143,29 @@
     return item;
   }
 
+  function ensureModes(){
+    state.v4=Object.assign({
+      questionMode:"both",
+      inputMode:"both",
+      answerMode:"mix"
+    },state.v4||{});
+    return state.v4;
+  }
+
+  function modes(){return ensureModes();}
+
+  function setMode(key,value){
+    ensureModes()[key]=value;save();
+  }
+
+  function applyPreset(name){
+    var cfg=ensureModes();
+    if(name==="handsfree"){cfg.questionMode="audio";cfg.inputMode="voice";cfg.answerMode="open";}
+    else if(name==="classic"){cfg.questionMode="screen";cfg.inputMode="touch";cfg.answerMode="choices";}
+    else if(name==="mixed"){cfg.questionMode="both";cfg.inputMode="both";cfg.answerMode="mix";}
+    save();
+  }
+
   function kindChoices(cat){
     var map={
       "География":["odd","truefalse","map"],
@@ -112,32 +181,54 @@
 
   function installSessionPicker(){
     makeSession=function(){
-      var id=state.activeProfile, s=pstats(), date=todayKey();
-      var key="v4|"+date+"|"+s.topic+"|"+s.challenge;
+      var id=state.activeProfile, s=pstats(), date=todayKey(), cfg=modes();
+      var key="v5|"+date+"|"+s.topic+"|"+s.challenge+"|"+cfg.questionMode+"|"+cfg.inputMode+"|"+cfg.answerMode;
       if(s.sessions[key] && s.sessions[key].questions && s.sessions[key].questions.length===10)return s.sessions[key];
-      var r=seeded("utro-v4|"+date+"|"+id+"|"+s.topic+"|"+s.challenge);
+      var r=seeded("utro-v5|"+date+"|"+id+"|"+s.topic+"|"+s.challenge+"|"+cfg.questionMode+"|"+cfg.inputMode+"|"+cfg.answerMode);
       var seen=new Set(s.seen||[]), used=new Set(), kindCount={}, famCount={};
       var plan=categoryPlan(r);
-      var questions=plan.map(function(cat){
+      var questions=plan.map(function(cat,pos){
         var target=currentTarget(cat);
+        var wantsMatch=cfg.answerMode==="match" || (cfg.answerMode==="mix" && cfg.inputMode!=="voice" && pos===4);
         var preferred=kindChoices(cat).slice().sort(function(a,b){return (kindCount[a]||0)-(kindCount[b]||0);})[0];
-        var pool=bank.filter(function(x){return x.category===cat && !used.has(x.id) && !seen.has(x.id);});
-        if(pool.length<3)pool=bank.filter(function(x){return x.category===cat && !used.has(x.id);});
+        var pool=bank.filter(function(x){
+          if(x.category!==cat||used.has(x.id)||seen.has(x.id))return false;
+          if(wantsMatch)return x.kind==="match";
+          return x.kind!=="match";
+        });
+        if(pool.length<2)pool=bank.filter(function(x){
+          if(x.category!==cat||used.has(x.id))return false;
+          if(wantsMatch)return x.kind==="match";
+          return x.kind!=="match";
+        });
+        if(pool.length<1 && wantsMatch)pool=bank.filter(function(x){return x.kind==="match"&&!used.has(x.id);});
+        if(pool.length<1)pool=bank.filter(function(x){return x.category===cat&&x.kind!=="match"&&!used.has(x.id);});
         var scored=pool.map(function(x){
-          var kindPenalty=x.kind===preferred?0:.32;
+          var kindPenalty=wantsMatch?0:(x.kind===preferred?0:.32);
           var repeatKind=(kindCount[x.kind]||0)*.18;
           var repeatFamily=(famCount[x.family]||0)*1.3;
           return {q:x,score:Math.abs(x.difficulty-target)+kindPenalty+repeatKind+repeatFamily+r()*.42};
         }).sort(function(a,b){return a.score-b.score;});
         var src=(scored[0]&&scored[0].q)||bank[Math.floor(r()*bank.length)];
         used.add(src.id);kindCount[src.kind]=(kindCount[src.kind]||0)+1;famCount[src.family]=(famCount[src.family]||0)+1;
+
+        if(src.kind==="match"){
+          return Object.assign({},src,{answerStyle:"match",correctIndex:0,options:[],matchSeed:Math.floor(r()*1e9)});
+        }
         var opts=shuffle([src.correct].concat(src.distractors),r).slice(0,src.kind==="truefalse"?2:4);
-        return Object.assign({},src,{options:opts,correctIndex:opts.indexOf(src.correct)});
+        var style=cfg.answerMode;
+        if(style==="mix"){
+          if(src.kind==="truefalse")style="choices";
+          else style=r()<.34?"open":"choices";
+        }
+        if(style==="match")style="choices";
+        return Object.assign({},src,{options:opts,correctIndex:opts.indexOf(src.correct),answerStyle:style});
       });
-      var session={key:key,date:date,profile:id,topic:s.topic,challenge:s.challenge,index:0,answers:[],questions:questions,finished:false,score:null,startedAt:Date.now()};
+      var session={key:key,date:date,profile:id,topic:s.topic,challenge:s.challenge,index:0,answers:[],questions:questions,finished:false,score:null,startedAt:Date.now(),v4:Object.assign({},cfg)};
       s.sessions[key]=session;save();return session;
     };
   }
+
 
   function toast(text){
     var old=document.querySelector(".v4-toast");if(old)old.remove();
@@ -177,7 +268,12 @@
   }
 
   function voiceText(item){
-    if(item.kind==="listen")return {text:item.speechText||item.correct,language:item.speechLang||"en"};
+    var style=item.answerStyle||modes().answerMode;
+    if(item.kind==="listen"){
+      if(style==="open")return {text:item.speechText||item.correct,language:item.speechLang||"en"};
+      return {text:item.speechText||item.correct,language:item.speechLang||"en"};
+    }
+    if(style==="open"||style==="match")return {text:item.text,language:"ru"};
     var names=["Первый вариант","Второй вариант","Третий вариант","Четвёртый вариант"];
     var options=(item.options||[]).map(function(x,i){return names[i]+": "+x;}).join(". ");
     return {text:item.text+". "+options,language:"ru"};
@@ -301,23 +397,34 @@
 
   async function carAskCurrent(){
     if(!carMode||!activeSession||activeSession.finished)return;
-    var seq=++carSequence;
-    var item=activeSession.questions[activeSession.index];
+    var seq=++carSequence,item=activeSession.questions[activeSession.index],cfg=modes();
+    if(cfg.questionMode==="screen"){
+      setCarStatus("listening","Слушаю ответ…","Вопрос на экране");
+      startListening();return;
+    }
     setCarStatus("speaking","Читаю вопрос…","");
     if(item.kind==="listen"){
       await playTts("Вопрос "+(activeSession.index+1)+". Слушай английское слово.","ru");
       if(!carMode||seq!==carSequence)return;
       await playTts(item.speechText||item.correct,item.speechLang||"en");
       if(!carMode||seq!==carSequence)return;
-      var n=["Первый","Второй","Третий","Четвёртый"];
-      var opts=item.options.map(function(x,i){return n[i]+": "+x;}).join(". ");
-      await playTts("Что оно означает? "+opts,"ru");
+      if(item.answerStyle==="choices"){
+        var n=["Первый","Второй","Третий","Четвёртый"];
+        var opts=item.options.map(function(x,i){return n[i]+": "+x;}).join(". ");
+        await playTts("Что оно означает? "+opts,"ru");
+      }else{
+        await playTts("Что оно означает? Скажи ответ своими словами.","ru");
+      }
     }else{
       var v=voiceText(item);
       await playTts("Вопрос "+(activeSession.index+1)+". "+v.text,v.language);
+      if(item.answerStyle==="open"){
+        await playTts("Ответь своими словами.","ru");
+      }
     }
     if(carMode&&seq===carSequence)startListening();
   }
+
 
   async function handleSpoken(transcripts){
     if(!carMode||!activeSession)return;
@@ -340,7 +447,7 @@
       return;
     }
     setCarStatus("listening","Не расслышал ответ","Я услышал: "+heard);
-    await playTts("Не расслышал. Скажи первый, второй, третий, четвёртый, букву варианта или сам ответ.","ru");
+    await playTts(item.answerStyle==="open"?"Не расслышал. Повтори сам ответ ещё раз.":"Не расслышал. Скажи первый, второй, третий, четвёртый, букву варианта или сам ответ.","ru");
     if(carMode)startListening();
   }
 
@@ -371,96 +478,234 @@
     if(!silent)toast("Голосовой режим выключен");
   }
 
-  async function startCarMode(button){
-    var SR=speechRecognitionCtor();
-    if(!SR){toast("Голосовое управление не поддерживается этим браузером");return;}
+  async function startVoiceControl(button){
+    var cfg=modes(),needsMic=cfg.inputMode==="voice"||cfg.inputMode==="both";
     try{
       if(button)button.classList.add("loading");
-      await requestMicrophone();
-      carMode=true;carSequence++;
-      document.body.classList.add("v4-car-mode");
-      activeSession=makeSession();
-      renderQuiz();
+      if(needsMic){
+        var SR=speechRecognitionCtor();
+        if(!SR){toast("На этом браузере нет голосового распознавания");return;}
+        await requestMicrophone();
+        carMode=true;carSequence++;document.body.classList.add("v4-car-mode");
+      }else{
+        carMode=false;document.body.classList.remove("v4-car-mode");
+      }
+      activeSession=makeSession();renderQuiz();
     }catch(err){
-      console.error(err);toast("Разреши доступ к микрофону для режима в машине");
+      console.error(err);toast("Разреши доступ к микрофону для голосового управления");
     }finally{if(button)button.classList.remove("loading");}
   }
 
   var KIND_META={
+  var KIND_META={
     listen:["🎧","НА СЛУХ"],truefalse:["⚡","ПРАВДА / ЛОЖЬ"],odd:["🧩","ЧТО ЛИШНЕЕ"],
     sequence:["🔢","ПРОДОЛЖИ РЯД"],scenario:["🧠","СИТУАЦИЯ"],timeline:["🕰️","ХРОНОЛОГИЯ"],
     number:["➗","БЫСТРЫЙ СЧЁТ"],map:["🧭","МИР"],lab:["🧪","НАУКА"],think:["◇","ПОДУМАЙ"],
-    puzzle:["💡","ЛОГИКА"],choice:["✦","ВЫБОР"]
+    puzzle:["💡","ЛОГИКА"],match:["🔗","СОЕДИНИ ПАРЫ"],choice:["✦","ВЫБОР"]
   };
+
+  var matchState=null;
+  var lastAutoQuestionKey="";
+
+  function openAnswerIndex(item,value){
+    var phrase=normalizeSpoken(value);
+    if(!phrase)return -1;
+    var best={index:-1,score:0};
+    item.options.forEach(function(opt,i){
+      var score=tokenScore(phrase,opt);
+      if(score>best.score)best={index:i,score:score};
+    });
+    if(tokenScore(phrase,item.correct)>.55)return item.correctIndex;
+    return best.score>.55?best.index:-1;
+  }
+
+  function renderMatching(item,answered){
+    var seed=seeded("match-ui|"+item.id+"|"+item.matchSeed);
+    var rights=shuffle(item.pairs.map(function(p){return p.right;}),seed);
+    if(!matchState||matchState.id!==item.id)matchState={id:item.id,left:null,done:[],mistakes:0};
+    var left=item.pairs.map(function(p,i){
+      var done=matchState.done.indexOf(i)>=0;
+      return "<button class=\"v4-match-item left "+(done?"done":"")+" "+(matchState.left===i?"selected":"")+"\" data-match-left=\""+i+"\" "+(done||answered?"disabled":"")+">"+esc(p.left)+"</button>";
+    }).join("");
+    var right=rights.map(function(value){
+      var pi=item.pairs.findIndex(function(p){return p.right===value;});
+      var done=matchState.done.indexOf(pi)>=0;
+      return "<button class=\"v4-match-item right "+(done?"done":"")+"\" data-match-right=\""+pi+"\" "+(done||answered?"disabled":"")+">"+esc(value)+"</button>";
+    }).join("");
+    return "<div class=\"v4-match\"><div class=\"v4-match-col\"><span>СЛЕВА</span>"+left+"</div><div class=\"v4-match-lines\">↔</div><div class=\"v4-match-col\"><span>СПРАВА</span>"+right+"</div></div>";
+  }
+
+  function handleMatchLeft(index){
+    if(!activeSession)return;
+    matchState.left=index;renderQuiz();
+  }
+
+  function handleMatchRight(index){
+    if(matchState.left==null)return toast("Сначала выбери карточку слева");
+    if(matchState.left===index){
+      if(matchState.done.indexOf(index)<0)matchState.done.push(index);
+      matchState.left=null;
+      if(matchState.done.length===activeSession.questions[activeSession.index].pairs.length){
+        var s=activeSession,q=s.questions[s.index];
+        s.answers[s.index]=0;updateSkill(q,true);pstats().seen.push(q.id);pstats().seen=pstats().seen.slice(-240);save();renderQuiz();
+      }else renderQuiz();
+    }else{
+      matchState.mistakes++;matchState.left=null;toast("Не эта пара — попробуй ещё");renderQuiz();
+    }
+  }
+
+  function submitOpenAnswer(value){
+    var s=activeSession,item=s.questions[s.index];
+    var idx=openAnswerIndex(item,value);
+    if(idx<0){toast("Не смог понять ответ — попробуй ещё раз");return;}
+    if(carMode)handleCarAnswer(idx);else answerQuestion(idx);
+  }
+
+  function maybeAutoSpeak(item,answered){
+    if(answered||carMode)return;
+    var cfg=modes(),key=activeSession.key+"|"+activeSession.index;
+    if(cfg.questionMode==="screen"||lastAutoQuestionKey===key)return;
+    lastAutoQuestionKey=key;
+    setTimeout(async function(){
+      if(!activeSession||activeSession.finished)return;
+      if(item.kind==="listen"){
+        await playTts("Слушай английское слово.","ru");
+        await playTts(item.speechText||item.correct,item.speechLang||"en");
+        if(item.answerStyle==="choices"){
+          var opts=item.options.map(function(x,i){return ["Первый","Второй","Третий","Четвёртый"][i]+": "+x;}).join(". ");
+          await playTts("Что оно означает? "+opts,"ru");
+        }else await playTts("Что оно означает?","ru");
+      }else{
+        var v=voiceText(item);await playTts(v.text,v.language);
+      }
+    },220);
+  }
 
   function installQuizRenderer(){
     renderQuiz=function(){
       view="quiz";
       var session=activeSession;if(!session){renderHome();return;}if(session.finished){renderResult();return;}
-      var i=session.index,item=session.questions[i],answer=session.answers[i];
+      var cfg=modes(),i=session.index,item=session.questions[i],answer=session.answers[i];
       selectedAnswer=Number.isInteger(answer)?answer:null;
-      var answered=selectedAnswer!==null,correct=answered&&selectedAnswer===item.correctIndex;
+      var answered=selectedAnswer!==null,correct=answered&&selectedAnswer===item.correctIndex,style=item.answerStyle||cfg.answerMode;
       var km=KIND_META[item.kind]||KIND_META.choice;
       var progress=session.questions.map(function(x,n){
         var cls=n<i?(session.answers[n]===session.questions[n].correctIndex?"ok":"bad"):(n===i?"now":"");
         return "<i class=\""+cls+"\"></i>";
       }).join("");
-      var answers=item.options.map(function(opt,n){
-        var cls="";
-        if(answered)cls=n===item.correctIndex?"correct":(n===selectedAnswer?"wrong":"muted");
-        var icon=answered&&n===item.correctIndex?"✓":(answered&&n===selectedAnswer?"×":"");
-        return "<button class=\"v4-answer "+cls+"\" data-answer=\""+n+"\" "+(answered?"disabled":"")+"><span>"+["A","B","C","D"][n]+"</span><b>"+esc(opt)+"</b><i>"+icon+"</i></button>";
-      }).join("");
+
+      var showText=cfg.questionMode!=="audio" || item.kind==="listen";
       var head;
       if(item.kind==="listen"){
-        head="<div class=\"v4-listen\"><div class=\"emoji\">🎧</div><h1>Что означает слово, которое ты услышишь?</h1><p>Само слово спрятано — слушай и выбирай смысл.</p><button data-action=\"speak\">▶</button></div>";
-      }else{
+        head="<div class=\"v4-listen\"><div class=\"emoji\">🎧</div><h1>Что означает слово, которое ты услышишь?</h1><p>"+(cfg.questionMode==="screen"?"Нажми ▶, чтобы услышать слово.":"Слово прозвучит автоматически.")+"</p><button data-action=\"speak\">▶</button></div>";
+      }else if(showText){
         head="<div class=\"v4-qintro\"><div class=\"v4-qicon\">"+(item.icon||km[0])+"</div><span>"+km[1].toLowerCase()+" · уровень "+item.difficulty+"/5</span></div><h1>"+esc(item.text)+"</h1>";
+      }else{
+        head="<div class=\"v4-audio-only\"><span>🎧</span><h1>Слушай вопрос</h1><p>Текст специально скрыт в режиме «только слушать».</p><button data-action=\"speak\">Повторить 🔊</button></div>";
       }
+
+      var answerArea="";
+      if(style==="match"){
+        answerArea=renderMatching(item,answered);
+      }else if(style==="open"){
+        answerArea=answered?"":("<form class=\"v4-open-answer\" data-open-form><input type=\"text\" autocomplete=\"off\" placeholder=\"Напиши или скажи ответ…\" aria-label=\"Ответ\"><button type=\"submit\">Ответить</button></form>");
+      }else{
+        answerArea="<div class=\"v4-answers "+(item.options.length===2?"two":"")+"\">"+item.options.map(function(opt,n){
+          var cls="";if(answered)cls=n===item.correctIndex?"correct":(n===selectedAnswer?"wrong":"muted");
+          var icon=answered&&n===item.correctIndex?"✓":(answered&&n===selectedAnswer?"×":"");
+          return "<button class=\"v4-answer "+cls+"\" data-answer=\""+n+"\" "+(answered?"disabled":"")+"><span>"+["A","B","C","D"][n]+"</span><b>"+esc(opt)+"</b><i>"+icon+"</i></button>";
+        }).join("")+"</div>";
+      }
+
       var feedback="";
       if(answered){
-        feedback="<div class=\"feedback v4-feedback "+(correct?"good":"oops")+"\"><strong>"+(correct?"Да! Именно так.":"Не совсем.")+"</strong><p>"+(correct?"":"Правильный ответ: <b>"+esc(item.correct)+"</b>. ")+esc(item.explanation)+"</p></div><button class=\"continue-btn\" data-action=\"next\">"+(i===9?"Показать результат":"Следующий вопрос")+" <span>→</span></button>";
+        var wrongPrefix=item.category==="Математика"?"":"Правильный ответ: <b>"+esc(item.correct)+"</b>. ";
+        feedback="<div class=\"feedback v4-feedback "+(correct?"good":"oops")+"\"><strong>"+(correct?"Да! Именно так.":"Не совсем.")+"</strong><p>"+(correct?"":wrongPrefix)+esc(item.explanation)+"</p></div><button class=\"continue-btn\" data-action=\"next\">"+(i===9?"Показать результат":"Следующий вопрос")+" <span>→</span></button>";
       }else{
-        feedback="<p class=\"v4-note\">🔊 Нажми на динамик, чтобы вопрос прочитал нейро-голос.</p>";
+        var hint=style==="open"?"Без подсказок: напиши ответ или скажи его голосом.":style==="match"?"Соедини каждую карточку слева с правильной справа.":"Можно выбрать кнопку или сказать букву/сам ответ.";
+        feedback="<p class=\"v4-note\">"+hint+"</p>";
       }
-      var carBanner=carMode?"<div class=\"v4-car-banner\" id=\"v4-car-banner\" data-state=\"idle\"><div class=\"v4-car-orb\"><span>🎙️</span><i></i><i></i><i></i></div><div><strong data-car-status>Голосовой режим включён</strong><small data-car-heard>Экран можно не трогать</small></div><button data-action=\"car-stop\" aria-label=\"Остановить голосовой режим\">×</button></div>":"";
-      app.innerHTML=shell("<main class=\"quiz-main\"><div class=\"quiz-toolbar\"><button class=\"back-link\" data-action=\"home\">← На главную</button><div class=\"quiz-person\"><span>"+esc(profile().letter)+"</span>"+esc(profile().name)+"</div></div>"+carBanner+"<section class=\"quiz-card v4-quiz\"><div class=\"v4-quiz-stage kind-"+esc(item.kind)+"\"><div class=\"quiz-progress-head\"><div><span>Вопрос "+(i+1)+"</span><b>"+(i+1)+" / 10</b></div><div class=\"progress-line\">"+progress+"</div></div><div class=\"v4-question\"><div class=\"v4-quiz-head\"><div class=\"v4-tags\"><span class=\"v4-type\">"+km[0]+" "+km[1]+"</span><span class=\"v4-cat\">"+esc(item.category)+"</span></div><button class=\"v4-voice\" data-action=\"speak\" aria-label=\"Озвучить\">🔊</button></div>"+head+"<div class=\"v4-answers "+(item.options.length===2?"two":"")+"\">"+answers+"</div>"+feedback+"</div></div></section></main>");
+
+      var voiceBanner=carMode?"<div class=\"v4-car-banner\" id=\"v4-car-banner\" data-state=\"idle\"><div class=\"v4-car-orb\"><span>🎙️</span><i></i><i></i><i></i></div><div><strong data-car-status>Голосовое управление включено</strong><small data-car-heard>Можно отвечать, говорить «повтори», «дальше» или «стоп»</small></div><button data-action=\"car-stop\" aria-label=\"Остановить голосовой режим\">×</button></div>":"";
+      app.innerHTML=shell("<main class=\"quiz-main\"><div class=\"quiz-toolbar\"><button class=\"back-link\" data-action=\"home\">← На главную</button><div class=\"quiz-person\"><span>"+esc(profile().letter)+"</span>"+esc(profile().name)+"</div></div>"+voiceBanner+"<section class=\"quiz-card v4-quiz\"><div class=\"v4-quiz-stage kind-"+esc(item.kind)+"\"><div class=\"quiz-progress-head\"><div><span>Вопрос "+(i+1)+"</span><b>"+(i+1)+" / 10</b></div><div class=\"progress-line\">"+progress+"</div></div><div class=\"v4-question\"><div class=\"v4-quiz-head\"><div class=\"v4-tags\"><span class=\"v4-type\">"+km[0]+" "+km[1]+"</span><span class=\"v4-cat\">"+esc(item.category)+"</span></div><button class=\"v4-voice\" data-action=\"speak\" aria-label=\"Озвучить\">🔊</button></div>"+head+answerArea+feedback+"</div></div></section></main>");
+
       wireCommon();
-      var home=app.querySelector("[data-action=home]");if(home)home.onclick=renderHome;
+      var home=app.querySelector("[data-action=home]");if(home)home.onclick=function(){if(carMode)stopCarMode(true);renderHome();};
       app.querySelectorAll("[data-answer]").forEach(function(btn){btn.onclick=function(){var n=Number(btn.dataset.answer);if(carMode)handleCarAnswer(n);else answerQuestion(n);};});
       app.querySelectorAll("[data-action=speak]").forEach(function(btn){btn.onclick=function(){var v=voiceText(item);playTts(v.text,v.language,btn);};});
+      var form=app.querySelector("[data-open-form]");if(form)form.onsubmit=function(e){e.preventDefault();submitOpenAnswer(form.querySelector("input").value);};
+      app.querySelectorAll("[data-match-left]").forEach(function(btn){btn.onclick=function(){handleMatchLeft(Number(btn.dataset.matchLeft));};});
+      app.querySelectorAll("[data-match-right]").forEach(function(btn){btn.onclick=function(){handleMatchRight(Number(btn.dataset.matchRight));};});
       var next=app.querySelector("[data-action=next]");if(next)next.onclick=nextQuestion;
       var stop=app.querySelector("[data-action=car-stop]");if(stop)stop.onclick=function(){stopCarMode();renderHome();};
-      if(carMode&&!answered)setTimeout(carAskCurrent,260);
+      if(carMode&&!answered)setTimeout(carAskCurrent,260);else maybeAutoSpeak(item,answered);
     };
+  }
+
+
+  function modeButton(group,value,label,active){
+    return "<button class=\"v4-mode-option "+(active?"active":"")+"\" data-mode-group=\""+group+"\" data-mode-value=\""+value+"\">"+label+"</button>";
   }
 
   function decorateHome(){
     var hero=document.querySelector(".hero-grid");if(!hero)return;
+    var cfg=modes();
     hero.classList.add("v4-home-hero");
-    var title=hero.querySelector(".hero-copy h1");if(title)title.innerHTML="Доброе утро, <em>"+esc(profile().name)+"</em>.<br>Сегодня без скучных вопросов.";
-    var lead=hero.querySelector(".hero-lead");if(lead)lead.textContent="10 вопросов, но каждый может быть другим: на слух, логика, ситуация, хронология, быстрый счёт или обычный выбор.";
+    var title=hero.querySelector(".hero-copy h1");if(title)title.innerHTML="Доброе утро, <em>"+esc(profile().name)+"</em>.<br>Выбери, как играть сегодня.";
+    var lead=hero.querySelector(".hero-lead");if(lead)lead.textContent="Можно просто смотреть, только слушать, отвечать голосом, без вариантов, соединять пары — или всё смешать.";
+
     var art=hero.querySelector(".hero-art");
-    if(art)art.innerHTML="<div class=\"v4-stack\"><article class=\"v4-stack-card\"><small>НА СЛУХ</small><b>🎧</b><h3>Listen & choose</h3><p>Слово слышишь, но не видишь.</p></article><article class=\"v4-stack-card\"><small>ЛОГИКА</small><b>🧩</b><h3>Что здесь лишнее?</h3><p>Ищи связь, а не вспоминай факт.</p></article><article class=\"v4-stack-card\"><small>СИТУАЦИЯ</small><b>🧠</b><h3>Что произойдёт?</h3><p>Мини-задачи из жизни и науки.</p></article></div>";
+    if(art)art.innerHTML="<div class=\"v4-stack\"><article class=\"v4-stack-card\"><small>БЕЗ ПОДСКАЗОК</small><b>💬</b><h3>Скажи сам</h3><p>Никаких A‑B‑C‑D.</p></article><article class=\"v4-stack-card\"><small>СОЕДИНИ</small><b>🔗</b><h3>Найди пары</h3><p>Страна ↔ столица, слово ↔ значение.</p></article><article class=\"v4-stack-card\"><small>ГОЛОС</small><b>🎙️</b><h3>Можно без рук</h3><p>Слушай и отвечай вслух.</p></article></div>";
+
     var today=hero.querySelector(".today-card");
-    if(today&&!today.querySelector(".v4-voice-test")){
+    if(today){
+      var start=today.querySelector("[data-action=start]");
+      if(start)start.onclick=function(){startVoiceControl(start);};
+      var existing=today.querySelector(".v4-voice-test");if(existing)existing.remove();
       var test=document.createElement("button");test.className="v4-voice-test";test.textContent="🔊 Голос";
-      test.onclick=function(e){e.stopPropagation();playTts("Доброе утро, "+profile().name+". Нейро-озвучка работает. Готов к десяти вопросам?","ru",test);};
+      test.onclick=function(e){e.stopPropagation();playTts("Привет, "+profile().name+". Проверка нового нейро голоса.","ru",test);};
       today.appendChild(test);
     }
-    if(today&&!document.querySelector(".v4-drive-card")){
-      var drive=document.createElement("button");drive.className="v4-drive-card";
-      drive.innerHTML="<span class=\"v4-drive-icon\">🚗</span><span><b>Режим в машине</b><small>Один раз нажми — дальше только слушай и отвечай голосом</small></span><em>hands-free →</em>";
-      drive.onclick=function(){startCarMode(drive);};
-      today.insertAdjacentElement("afterend",drive);
+
+    var old=hero.querySelector(".v4-drive-card");if(old)old.remove();
+    var oldBuilder=hero.querySelector(".v4-mode-builder");if(oldBuilder)oldBuilder.remove();
+    if(today){
+      var builder=document.createElement("div");builder.className="v4-mode-builder";
+      builder.innerHTML=
+        "<div class=\"v4-presets\"><button data-preset=\"handsfree\">🎙️ Без рук</button><button data-preset=\"classic\">👆 Классика</button><button data-preset=\"mixed\" class=\"active\">✨ Микс</button></div>"+
+        "<div class=\"v4-mode-row\"><span><b>Вопрос</b><small>как получать вопрос</small></span><div>"+
+          modeButton("questionMode","screen","👀 Смотреть",cfg.questionMode==="screen")+
+          modeButton("questionMode","audio","🔊 Слушать",cfg.questionMode==="audio")+
+          modeButton("questionMode","both","👀🔊 Оба",cfg.questionMode==="both")+
+        "</div></div>"+
+        "<div class=\"v4-mode-row\"><span><b>Управление</b><small>как отвечать</small></span><div>"+
+          modeButton("inputMode","touch","👆 Руками",cfg.inputMode==="touch")+
+          modeButton("inputMode","voice","🎙️ Голосом",cfg.inputMode==="voice")+
+          modeButton("inputMode","both","👆🎙️ Оба",cfg.inputMode==="both")+
+        "</div></div>"+
+        "<div class=\"v4-mode-row\"><span><b>Формат</b><small>какой тип ответа</small></span><div>"+
+          modeButton("answerMode","mix","🎲 Микс",cfg.answerMode==="mix")+
+          modeButton("answerMode","choices","🔤 A‑B‑C‑D",cfg.answerMode==="choices")+
+          modeButton("answerMode","open","💬 Без вариантов",cfg.answerMode==="open")+
+          modeButton("answerMode","match","🔗 Соедини",cfg.answerMode==="match")+
+        "</div></div>";
+      today.insertAdjacentElement("afterend",builder);
+      builder.querySelectorAll("[data-mode-group]").forEach(function(btn){
+        btn.onclick=function(){setMode(btn.dataset.modeGroup,btn.dataset.modeValue);renderHome();};
+      });
+      builder.querySelectorAll("[data-preset]").forEach(function(btn){
+        btn.onclick=function(){applyPreset(btn.dataset.preset);renderHome();};
+      });
     }
+
     var stats=document.querySelector(".stats-grid");
     if(stats&&!document.querySelector(".v4-mechanics")){
       var strip=document.createElement("div");strip.className="v4-mechanics";
-      strip.innerHTML="<span>🎧 на слух</span><span>⚡ правда / ложь</span><span>🧩 что лишнее</span><span>🕰️ хронология</span><span>🛒 задачи из жизни</span><span>🧠 ситуации</span>";
+      strip.innerHTML="<span>💬 свободный ответ</span><span>🔗 соедини пары</span><span>🎧 только слушать</span><span>🎙️ голосом</span><span>⚡ правда / ложь</span><span>🧩 что лишнее</span><span>🕰️ хронология</span>";
       stats.parentNode.insertBefore(strip,stats);
     }
   }
+
 
   function installHome(){
     var baseHome=renderHome;
@@ -471,7 +716,8 @@
     if(booted)return;
     if(typeof bank==="undefined" || !bank || bank.length===0){setTimeout(boot,60);return;}
     booted=true;
-    extraQuestions().forEach(function(item){if(!bank.some(function(x){return x.id===item.id;}))bank.push(item);});
+    extraQuestions().concat(matchingQuestions()).forEach(function(item){if(!bank.some(function(x){return x.id===item.id;}))bank.push(item);});
+    ensureModes();
     bank.forEach(enrich);
     bankById=new Map(bank.map(function(x){return [x.id,x];}));
     state.audio=state.audio||{provider:"microsoft-neural"};
