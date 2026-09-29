@@ -208,3 +208,15 @@ body.v4-car-mode .v4-car-banner strong::first-letter{text-transform:uppercase}
   .v4-match{grid-template-columns:1fr 22px 1fr;gap:6px}.v4-match-lines{font-size:16px}
   .v4-match-item{font-size:11px;min-height:54px;padding:8px}
 }
+
+.v4-hints{display:grid;gap:8px;margin:13px 0}
+.v4-hints>button{
+  justify-self:start;border:1px solid #ead9a0;background:#fff8d9;color:#6c5817;border-radius:13px;
+  min-height:42px;padding:0 13px;font-size:12px;font-weight:900
+}
+.v4-hint-line{
+  display:grid;grid-template-columns:auto minmax(0,1fr);gap:9px;align-items:start;
+  background:#fff9e8;border:1px solid #efe1b0;border-radius:14px;padding:10px 12px
+}
+.v4-hint-line b{font-size:11px;color:#7e671c;white-space:nowrap}.v4-hint-line span{font-size:12px;line-height:1.45;color:#5a6570}
+.v4-start.loading{opacity:.7;pointer-events:none}
